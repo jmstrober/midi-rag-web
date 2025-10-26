@@ -4,6 +4,7 @@ chromadb
 langchain
 langchain-community
 langchain-anthropic
+langchain-core
 sentence-transformers
 numpy
 pandas

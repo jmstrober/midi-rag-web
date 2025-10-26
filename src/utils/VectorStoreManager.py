@@ -3,7 +3,10 @@ import chromadb
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from sentence_transformers import SentenceTransformer
-from langchain.schema import Document
+try:
+    from langchain_core.documents import Document
+except ImportError:
+    from langchain.schema import Document
 import uuid
 
 logger = logging.getLogger(__name__)
