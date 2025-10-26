@@ -1,0 +1,10 @@
+streamlit
+anthropic
+chromadb
+langchain
+langchain-community
+langchain-anthropic
+sentence-transformers
+numpy
+pandas
+python-dotenv
