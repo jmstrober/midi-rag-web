@@ -89,7 +89,7 @@ midi_rag_web/
 ## 🛠️ Technical Details
 
 - **Framework**: Streamlit
-- **LLM**: Anthropic Claude 3.5 Sonnet
+- **LLM**: Anthropic Claude Sonnet 4
 - **Vector Store**: ChromaDB
 - **Documents**: 4,726+ protocol documents
 - **Embeddings**: Sentence Transformers

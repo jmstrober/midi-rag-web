@@ -233,7 +233,7 @@ def clinical_interface():
         except Exception:
             st.metric("📊 Documents", "Connected")
     with col2:
-        st.metric("🧠 Model", "Claude 3.5 Sonnet")
+        st.metric("🧠 Model", "Claude Sonnet 4")
     with col3:
         st.metric("🔑 LLM Status", "✅ Available" if clinical_rag.client else "❌ Unavailable")
     
@@ -414,7 +414,7 @@ def main():
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: #666; font-size: 0.9rem;'>"
-        "Midi RAG System - Powered by Claude 3.5 Sonnet & ChromaDB"
+        "Midi RAG System - Powered by Claude Sonnet 4 & ChromaDB"
         "</div>",
         unsafe_allow_html=True
     )
