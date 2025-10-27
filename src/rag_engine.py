@@ -67,6 +67,40 @@ class RAGEngine:
             logger.warning(f"⚠️  LLM provider {model_provider} not available. Using fallback mode.")
             self.client = None
 
+    def _is_quality_content(self, content: str) -> bool:
+        """Filter out low-quality content like references, citations, fragments."""
+        content = content.strip()
+        
+        # Too short to be useful
+        if len(content) < 100:
+            return False
+        
+        # Starts with lowercase (likely a fragment)
+        if content and content[0].islower():
+            return False
+        
+        # Mostly citations/references (high proportion of punctuation)
+        punct_count = sum(1 for c in content[:200] if c in '.,;()[]{}')
+        if punct_count > len(content[:200]) * 0.4:  # More than 40% punctuation
+            return False
+            
+        # Contains mostly URLs, DOIs, or reference patterns
+        reference_patterns = ['doi:', 'http:', 'PMID:', 'et al.', 'pp.', 'Vol.']
+        reference_count = sum(1 for pattern in reference_patterns if pattern in content[:300])
+        if reference_count > 2:
+            return False
+            
+        # Starts with common fragment patterns
+        fragment_starts = ['with ', 'and ', 'or ', 'but ', 'however ', 'therefore ', 'thus ']
+        if any(content.lower().startswith(start) for start in fragment_starts):
+            return False
+            
+        # Contains actual clinical content indicators
+        clinical_indicators = ['patient', 'treatment', 'therapy', 'clinical', 'protocol', 'recommendation', 'contraindication']
+        has_clinical_content = any(indicator in content.lower()[:500] for indicator in clinical_indicators)
+        
+        return has_clinical_content
+
     def _clean_text(self, text: str) -> str:
         """Clean extracted text from PDFs and other sources."""
         if not text:
@@ -182,11 +216,15 @@ class RAGEngine:
         combined_results = list(all_results.values())
         combined_results.sort(key=lambda x: x[1], reverse=True)
         
-        # Take top results but ensure we have content from different sources
+        # Take top results but ensure we have content from different sources and quality content
         final_results = []
         seen_sources = set()
         
         for doc, score in combined_results:
+            # Filter out low-quality content
+            if not self._is_quality_content(doc.page_content):
+                continue
+                
             source_file = doc.metadata.get('source', 'unknown')
             # Take up to 2 chunks per source file for diversity
             source_count = len([s for s in seen_sources if s == source_file])
@@ -236,12 +274,24 @@ class RAGEngine:
                 # Format source display with data source info
                 source_display = self._format_source_display(formatted_filename, data_source, content_type)
                 
-                # Show substantial text for meaningful context - increased from 400 to 1200 characters
+                # Show substantial text for meaningful context - try to find section beginnings
+                cleaned_content = self._clean_text(doc.page_content)
+                
+                # Try to find a better starting point if content seems to be mid-sentence
+                content_to_use = cleaned_content
+                if cleaned_content and cleaned_content[0].islower():
+                    # Look for sentence boundaries to find a better starting point
+                    sentences = cleaned_content.split('. ')
+                    for i, sentence in enumerate(sentences[1:], 1):  # Skip first fragment
+                        if sentence and sentence[0].isupper() and len(sentence) > 50:
+                            content_to_use = '. '.join(sentences[i:])
+                            break
+                
                 preview_length = 1200
-                content_preview = cleaned_content[:preview_length]
+                content_preview = content_to_use[:preview_length]
                 
                 # Try to end at a sentence boundary to avoid cutting mid-sentence
-                if len(cleaned_content) > preview_length:
+                if len(content_to_use) > preview_length:
                     # Look for sentence endings within the last 100 characters
                     last_period = content_preview.rfind('. ')
                     last_exclamation = content_preview.rfind('! ')
