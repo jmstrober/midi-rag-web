@@ -46,22 +46,38 @@ class RAGEngine:
         self.model_provider = model_provider
         self.model_name = model_name
         
-        # Initialize LLM client with environment variables
+        # Initialize LLM client with environment variables or Streamlit secrets
         if model_provider == "anthropic" and anthropic:
+            # Try to get API key from environment or Streamlit secrets
             api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                try:
+                    import streamlit as st
+                    api_key = st.secrets.get("ANTHROPIC_API_KEY")
+                except:
+                    pass
+            
             if api_key:
                 self.client = anthropic.Anthropic(api_key=api_key)
                 logger.info(f"✅ Initialized Anthropic client with model: {model_name}")
             else:
-                logger.warning("⚠️  ANTHROPIC_API_KEY not found in environment. Using fallback mode.")
+                logger.warning("⚠️  ANTHROPIC_API_KEY not found in environment or secrets. Using fallback mode.")
                 self.client = None
         elif model_provider == "openai" and openai:
+            # Try to get API key from environment or Streamlit secrets
             api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                try:
+                    import streamlit as st
+                    api_key = st.secrets.get("OPENAI_API_KEY")
+                except:
+                    pass
+            
             if api_key:
                 self.client = openai.OpenAI(api_key=api_key)
                 logger.info(f"✅ Initialized OpenAI client with model: {model_name}")
             else:
-                logger.warning("⚠️  OPENAI_API_KEY not found in environment. Using fallback mode.")
+                logger.warning("⚠️  OPENAI_API_KEY not found in environment or secrets. Using fallback mode.")
                 self.client = None
         else:
             logger.warning(f"⚠️  LLM provider {model_provider} not available. Using fallback mode.")
