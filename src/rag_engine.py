@@ -67,40 +67,6 @@ class RAGEngine:
             logger.warning(f"⚠️  LLM provider {model_provider} not available. Using fallback mode.")
             self.client = None
 
-    def _is_quality_content(self, content: str) -> bool:
-        """Filter out low-quality content like references, citations, fragments."""
-        content = content.strip()
-        
-        # Too short to be useful
-        if len(content) < 100:
-            return False
-        
-        # Starts with lowercase (likely a fragment)
-        if content and content[0].islower():
-            return False
-        
-        # Mostly citations/references (high proportion of punctuation)
-        punct_count = sum(1 for c in content[:200] if c in '.,;()[]{}')
-        if punct_count > len(content[:200]) * 0.4:  # More than 40% punctuation
-            return False
-            
-        # Contains mostly URLs, DOIs, or reference patterns
-        reference_patterns = ['doi:', 'http:', 'PMID:', 'et al.', 'pp.', 'Vol.']
-        reference_count = sum(1 for pattern in reference_patterns if pattern in content[:300])
-        if reference_count > 2:
-            return False
-            
-        # Starts with common fragment patterns
-        fragment_starts = ['with ', 'and ', 'or ', 'but ', 'however ', 'therefore ', 'thus ']
-        if any(content.lower().startswith(start) for start in fragment_starts):
-            return False
-            
-        # Contains actual clinical content indicators
-        clinical_indicators = ['patient', 'treatment', 'therapy', 'clinical', 'protocol', 'recommendation', 'contraindication']
-        has_clinical_content = any(indicator in content.lower()[:500] for indicator in clinical_indicators)
-        
-        return has_clinical_content
-
     def _clean_text(self, text: str) -> str:
         """Clean extracted text from PDFs and other sources."""
         if not text:
@@ -175,7 +141,7 @@ class RAGEngine:
         return base_queries
 
     def _comprehensive_search(self, question: str, k: int = 15, protocol_type: Optional[str] = None) -> List[tuple]:
-        """Perform comprehensive search using multiple strategies and get more complete content."""
+        """Perform comprehensive search using multiple strategies."""
         
         search_filter = {"protocol_type": protocol_type} if protocol_type else None
         all_results = {}
@@ -183,12 +149,12 @@ class RAGEngine:
         # Get enhanced queries
         search_queries = self._enhance_query_for_comprehensive_search(question)
         
-        # Search with all queries - increase k to get more diverse results
+        # Search with all queries
         for i, query in enumerate(search_queries):
             try:
                 results = self.vector_store.search_with_scores(
                     query=query,
-                    k=k + 5,  # Get extra results for diversity
+                    k=k,
                     filter_dict=search_filter
                 )
                 
@@ -196,11 +162,7 @@ class RAGEngine:
                 weight = 1.0 if i == 0 else 0.7
                 
                 for doc, score in results:
-                    # Use source file + chunk info for better deduplication
-                    source_file = doc.metadata.get('source', 'unknown')
-                    chunk_index = doc.metadata.get('chunk_index', 0)
-                    doc_id = f"{source_file}_{chunk_index}"
-                    
+                    doc_id = str(hash(doc.page_content[:100]))
                     if doc_id in all_results:
                         # Boost score for documents found in multiple searches
                         existing_score = all_results[doc_id][1]
@@ -212,29 +174,11 @@ class RAGEngine:
                 logger.warning(f"Search failed for query '{query}': {str(e)}")
                 continue
         
-        # Sort by combined score and return top results, but ensure diversity
+        # Sort by combined score and return top results
         combined_results = list(all_results.values())
         combined_results.sort(key=lambda x: x[1], reverse=True)
         
-        # Take top results but ensure we have content from different sources and quality content
-        final_results = []
-        seen_sources = set()
-        
-        for doc, score in combined_results:
-            # Filter out low-quality content
-            if not self._is_quality_content(doc.page_content):
-                continue
-                
-            source_file = doc.metadata.get('source', 'unknown')
-            # Take up to 2 chunks per source file for diversity
-            source_count = len([s for s in seen_sources if s == source_file])
-            if source_count < 2 or len(final_results) < k//2:
-                final_results.append((doc, score))
-                seen_sources.add(source_file)
-                if len(final_results) >= k:
-                    break
-        
-        return final_results
+        return combined_results[:k]
 
     def query(self, 
               question: str, 
@@ -274,36 +218,11 @@ class RAGEngine:
                 # Format source display with data source info
                 source_display = self._format_source_display(formatted_filename, data_source, content_type)
                 
-                # Show substantial text for meaningful context - try to find section beginnings
-                cleaned_content = self._clean_text(doc.page_content)
-                
-                # Try to find a better starting point if content seems to be mid-sentence
-                content_to_use = cleaned_content
-                if cleaned_content and cleaned_content[0].islower():
-                    # Look for sentence boundaries to find a better starting point
-                    sentences = cleaned_content.split('. ')
-                    for i, sentence in enumerate(sentences[1:], 1):  # Skip first fragment
-                        if sentence and sentence[0].isupper() and len(sentence) > 50:
-                            content_to_use = '. '.join(sentences[i:])
-                            break
-                
-                preview_length = 1200
-                content_preview = content_to_use[:preview_length]
-                
-                # Try to end at a sentence boundary to avoid cutting mid-sentence
-                if len(content_to_use) > preview_length:
-                    # Look for sentence endings within the last 100 characters
-                    last_period = content_preview.rfind('. ')
-                    last_exclamation = content_preview.rfind('! ')
-                    last_question = content_preview.rfind('? ')
-                    
-                    # Find the latest sentence ending
-                    sentence_end = max(last_period, last_exclamation, last_question)
-                    
-                    if sentence_end > preview_length - 200:  # If we found a good break point
-                        content_preview = content_preview[:sentence_end + 2]  # Include the space after punctuation
-                    else:
-                        content_preview += "..."
+                # Show more text in preview - increase from 200 to 400 characters
+                preview_length = 400
+                content_preview = cleaned_content[:preview_length]
+                if len(cleaned_content) > preview_length:
+                    content_preview += "..."
                 
                 sources.append({
                     "content": content_preview,
@@ -442,22 +361,7 @@ Provide a comprehensive clinical response:"""
             answer_parts.append(f"\n**{protocol_type.replace('_', ' ').title()} Protocol Guidelines:**")
             
             for i, (content, score) in enumerate(contents[:2]):
-                # Increase preview length and improve sentence boundaries
-                preview_length = 1200
-                preview = content[:preview_length]
-                
-                # Try to end at a sentence boundary
-                if len(content) > preview_length:
-                    last_period = preview.rfind('. ')
-                    last_exclamation = preview.rfind('! ')
-                    last_question = preview.rfind('? ')
-                    sentence_end = max(last_period, last_exclamation, last_question)
-                    
-                    if sentence_end > preview_length - 200:
-                        preview = preview[:sentence_end + 2]
-                    else:
-                        preview += "..."
-                
+                preview = content[:400] + "..." if len(content) > 400 else content
                 answer_parts.append(f"\n• {preview}")
         
         answer_parts.append(f"\n\n**CLINICAL RECOMMENDATION:**")
