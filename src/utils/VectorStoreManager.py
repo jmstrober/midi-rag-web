@@ -12,34 +12,139 @@ import uuid
 logger = logging.getLogger(__name__)
 
 class VectorStoreManager:
-    """Manages the vector database for storing and retrieving clinical protocols."""
+    """Manages the vector database for storing and retrieving clinical protocols with medical domain embeddings."""
     
     def __init__(self, persist_directory: str = "./data/chroma_db"):
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
         
-        # Initialize embeddings model directly
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Initialize medical embeddings model for better clinical domain understanding
+        self.embedding_model = SentenceTransformer('microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext')
+        logger.info("Initialized medical domain embedding model: BiomedNLP-PubMedBERT")
         
         # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(
             path=str(self.persist_directory)
         )
         
-        # Get or create collection
-        self.collection_name = "midi_protocols"
+        # Get or create collection with medical-specific metadata
+        self.collection_name = "midi_protocols_medical"
         try:
             self.collection = self.client.get_collection(self.collection_name)
-            logger.info(f"Loaded existing collection: {self.collection_name}")
+            logger.info(f"Loaded existing medical collection: {self.collection_name}")
         except chromadb.errors.NotFoundError:
-            # Collection doesn't exist, create it
+            # Collection doesn't exist, create it with medical-specific configuration
             self.collection = self.client.create_collection(
                 name=self.collection_name,
-                metadata={"description": "Midi clinical protocols for RAG system"}
+                metadata={
+                    "description": "Midi clinical protocols with medical domain embeddings",
+                    "embedding_model": "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+                    "domain": "clinical_medicine",
+                    "chunk_strategy": "medical_semantic"
+                }
             )
-            logger.info(f"Created new collection: {self.collection_name}")
+            logger.info(f"Created new medical collection: {self.collection_name}")
         
-        logger.info(f"Vector store initialized at {self.persist_directory}")
+        logger.info(f"Medical vector store initialized at {self.persist_directory}")
+    
+    def create_medical_chunks(self, text: str, source_metadata: Dict[str, Any]) -> List[Document]:
+        """Create medically-aware chunks from clinical documents."""
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        
+        # Medical-specific separators that preserve clinical meaning
+        medical_separators = [
+            "\n\n## ",          # Protocol sections
+            "\n\n### ",         # Subsections
+            "\n\n#### ",        # Sub-subsections
+            "\n\nBACKGROund:",  # Common clinical sections
+            "\n\nCRITERIA:",
+            "\n\nCONTRAINDICATION",
+            "\n\nINDICATION",
+            "\n\nPROCEDURE:",
+            "\n\nDOSING:",
+            "\n\nMONITORING:",
+            "\n\n• ",           # Bullet points
+            "\n\n1. ",          # Numbered lists
+            "\n\n",             # Paragraph breaks
+            "\n",               # Line breaks
+            ". ",               # Sentence breaks
+            " "                 # Word breaks
+        ]
+        
+        # Use larger chunks for clinical protocols (more context)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1500,           # Increased from 1000 for better clinical context
+            chunk_overlap=300,         # Increased overlap to preserve clinical relationships
+            separators=medical_separators,
+            length_function=len
+        )
+        
+        # Split the text
+        chunks = text_splitter.split_text(text)
+        
+        # Create Document objects with enhanced metadata
+        documents = []
+        for i, chunk in enumerate(chunks):
+            # Detect medical concepts in the chunk
+            medical_concepts = self._extract_medical_concepts(chunk)
+            
+            chunk_metadata = {
+                **source_metadata,
+                "chunk_index": i,
+                "chunk_id": f"{source_metadata.get('source', 'unknown')}_{i}",
+                "chunk_size": len(chunk),
+                "medical_concepts": medical_concepts.get("concepts", []),
+                "clinical_section": medical_concepts.get("section_type", "general"),
+                "contains_contraindications": "contraindication" in chunk.lower(),
+                "contains_dosing": any(term in chunk.lower() for term in ["mg", "dose", "dosing", "administr"]),
+                "contains_criteria": "criteria" in chunk.lower() or "eligible" in chunk.lower(),
+            }
+            
+            documents.append(Document(
+                page_content=chunk,
+                metadata=chunk_metadata
+            ))
+        
+        logger.info(f"Created {len(documents)} medical chunks from source: {source_metadata.get('source', 'unknown')}")
+        return documents
+    
+    def _extract_medical_concepts(self, text: str) -> Dict[str, Any]:
+        """Extract basic medical concepts and section types from text."""
+        text_lower = text.lower()
+        
+        # Detect section types
+        section_type = "general"
+        if any(term in text_lower for term in ["background", "overview", "introduction"]):
+            section_type = "background"
+        elif any(term in text_lower for term in ["criteria", "eligible", "indication"]):
+            section_type = "criteria"
+        elif any(term in text_lower for term in ["contraindication", "caution", "warning"]):
+            section_type = "contraindications"
+        elif any(term in text_lower for term in ["procedure", "protocol", "treatment"]):
+            section_type = "procedure"
+        elif any(term in text_lower for term in ["monitor", "follow", "assess"]):
+            section_type = "monitoring"
+        elif any(term in text_lower for term in ["dose", "dosing", "administr", "mg", "mcg"]):
+            section_type = "dosing"
+        
+        # Extract basic medical concepts
+        medical_terms = []
+        clinical_keywords = [
+            "hormone", "estrogen", "progesterone", "testosterone",
+            "menopause", "perimenopause", "postmenopause",
+            "thyroid", "diabetes", "cardiovascular", "breast cancer",
+            "contraindication", "indication", "monitoring", "assessment",
+            "protocol", "guideline", "recommendation", "criteria"
+        ]
+        
+        for keyword in clinical_keywords:
+            if keyword in text_lower:
+                medical_terms.append(keyword)
+        
+        return {
+            "section_type": section_type,
+            "concepts": medical_terms
+        }
     
     def add_documents(self, documents: List[Document]) -> List[str]:
         """Add documents to the vector store."""
