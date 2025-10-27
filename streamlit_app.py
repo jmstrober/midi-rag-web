@@ -322,12 +322,42 @@ def clinical_interface():
                 # Show sources if available
                 sources = answer_msg.get("sources", [])
                 if sources:
-                    with st.expander("📚 View Sources"):
+                    with st.expander(f"📚 View Sources ({len(sources)} found)"):
                         for i, source in enumerate(sources, 1):
-                            st.markdown(f"**{i}. {source.get('source', 'Unknown')}** (Score: {source.get('confidence_score', 'N/A'):.3f})")
+                            # Format like CLI: filename (protocol_type) - Score: confidence
+                            source_title = source.get('source', 'Unknown')
+                            protocol_type = source.get('protocol_type', 'general')
+                            confidence = source.get('confidence_score', 0)
+                            data_source = source.get('data_source', 'unknown')
+                            
+                            # Clean up source title for better display
+                            if source_title.startswith('📋 Clinical Protocol: '):
+                                display_title = source_title.replace('📋 Clinical Protocol: ', '')
+                            elif source_title.startswith('📰 Midi Blog: '):
+                                display_title = source_title.replace('📰 Midi Blog: ', '')
+                            elif source_title.startswith('❓ Support Article: '):
+                                display_title = source_title.replace('❓ Support Article: ', '')
+                            else:
+                                display_title = source_title
+                            
+                            # Format header like CLI
+                            st.markdown(f"**{i}. {display_title}** ({protocol_type}) - Score: {confidence:.3f}")
+                            st.markdown(f"*Data Source: {data_source}*")
+                            
+                            # Show full content like CLI (already truncated by RAG engine)
                             if source.get("content"):
-                                st.text(source["content"][:300] + "..." if len(source["content"]) > 300 else source["content"])
-                            st.markdown("---")
+                                content = source["content"]
+                                # Use code block for better formatting and readability
+                                st.text_area(
+                                    f"Content from source {i}:",
+                                    content,
+                                    height=150,
+                                    key=f"source_content_{i}_{hash(content[:50])}",
+                                    disabled=True
+                                )
+                            
+                            if i < len(sources):  # Add separator between sources except for last one
+                                st.markdown("---")
 
 def main():
     """Main application"""
