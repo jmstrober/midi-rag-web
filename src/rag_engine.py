@@ -16,10 +16,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).parent / 'utils'))
 
 from VectorStoreManager import VectorStoreManager
-try:
-    from langchain_core.documents import Document
-except ImportError:
-    from langchain.schema import Document
+from langchain.schema import Document
 
 # For LLM integration
 try:
@@ -40,48 +37,92 @@ class RAGEngine:
     def __init__(self, 
                  vector_store_path: str = "./data/chroma_db",
                  model_provider: str = "anthropic",
-                 model_name: str = "claude-sonnet-4"):
+                 model_name: str = "claude-3-5-sonnet-20241022"):
         
         self.vector_store = VectorStoreManager(vector_store_path)
         self.model_provider = model_provider
         self.model_name = model_name
         
-        # Initialize LLM client with environment variables or Streamlit secrets
+        # Initialize LLM client with environment variables
         if model_provider == "anthropic" and anthropic:
-            # Try to get API key from environment or Streamlit secrets
             api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                try:
-                    import streamlit as st
-                    api_key = st.secrets.get("ANTHROPIC_API_KEY")
-                except:
-                    pass
-            
             if api_key:
                 self.client = anthropic.Anthropic(api_key=api_key)
                 logger.info(f"✅ Initialized Anthropic client with model: {model_name}")
             else:
-                logger.warning("⚠️  ANTHROPIC_API_KEY not found in environment or secrets. Using fallback mode.")
+                logger.warning("⚠️  ANTHROPIC_API_KEY not found in environment. Using fallback mode.")
                 self.client = None
         elif model_provider == "openai" and openai:
-            # Try to get API key from environment or Streamlit secrets
             api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                try:
-                    import streamlit as st
-                    api_key = st.secrets.get("OPENAI_API_KEY")
-                except:
-                    pass
-            
             if api_key:
                 self.client = openai.OpenAI(api_key=api_key)
                 logger.info(f"✅ Initialized OpenAI client with model: {model_name}")
             else:
-                logger.warning("⚠️  OPENAI_API_KEY not found in environment or secrets. Using fallback mode.")
+                logger.warning("⚠️  OPENAI_API_KEY not found in environment. Using fallback mode.")
                 self.client = None
         else:
             logger.warning(f"⚠️  LLM provider {model_provider} not available. Using fallback mode.")
             self.client = None
+
+    def _extract_smart_excerpt(self, content: str, max_length: int = 600) -> str:
+        """Extract a smart excerpt that preserves sentence boundaries and logical flow."""
+        if not content or len(content) <= max_length:
+            return content
+        
+        # Clean up the content first
+        cleaned_content = self._clean_text(content)
+        
+        if len(cleaned_content) <= max_length:
+            return cleaned_content
+        
+        # Find sentence boundaries using multiple delimiters
+        sentence_endings = ['. ', '! ', '? ', '.\n', '!\n', '?\n']
+        
+        # Find the best cutoff point - try to get close to max_length but end at sentence boundary
+        best_cutoff = 0
+        
+        # Look for sentence endings near the target length
+        search_start = max(0, max_length - 150)  # Start looking 150 chars before target
+        search_end = min(len(cleaned_content), max_length + 100)  # End 100 chars after target
+        
+        for i in range(search_start, search_end):
+            for ending in sentence_endings:
+                if cleaned_content[i:i+len(ending)] == ending:
+                    # Found a sentence ending, check if it's a good stopping point
+                    next_pos = i + len(ending)
+                    if next_pos <= max_length + 50:  # Allow some buffer
+                        best_cutoff = next_pos
+                    elif best_cutoff == 0:  # No good cutoff found yet, use this one
+                        best_cutoff = next_pos
+        
+        # If no good sentence boundary found, look for paragraph breaks
+        if best_cutoff == 0:
+            for i in range(search_start, search_end):
+                if cleaned_content[i:i+2] == '\n\n' or cleaned_content[i:i+2] == '  ':
+                    next_pos = i + 2
+                    if next_pos <= max_length + 50:
+                        best_cutoff = next_pos
+                        break
+        
+        # If still no good cutoff, look for any period followed by space
+        if best_cutoff == 0:
+            last_period = cleaned_content.rfind('. ', 0, max_length + 50)
+            if last_period > max_length - 200:  # Only use if reasonably close to target
+                best_cutoff = last_period + 2
+        
+        # Fall back to original approach if nothing found
+        if best_cutoff == 0 or best_cutoff < max_length // 2:
+            return cleaned_content[:max_length] + "..."
+        
+        excerpt = cleaned_content[:best_cutoff].strip()
+        
+        # Add ellipsis if we cut off the content
+        if best_cutoff < len(cleaned_content):
+            # Don't add ellipsis if we ended with a sentence
+            if not any(excerpt.endswith(ending.strip()) for ending in sentence_endings):
+                excerpt += "..."
+        
+        return excerpt
 
     def _clean_text(self, text: str) -> str:
         """Clean extracted text from PDFs and other sources."""
@@ -157,7 +198,7 @@ class RAGEngine:
         return base_queries
 
     def _comprehensive_search(self, question: str, k: int = 15, protocol_type: Optional[str] = None) -> List[tuple]:
-        """Perform comprehensive search using multiple strategies with source prioritization."""
+        """Perform comprehensive search using multiple strategies."""
         
         search_filter = {"protocol_type": protocol_type} if protocol_type else None
         all_results = {}
@@ -178,20 +219,13 @@ class RAGEngine:
                 weight = 1.0 if i == 0 else 0.7
                 
                 for doc, score in results:
-                    # Apply source type prioritization boost
-                    data_source = doc.metadata.get("data_source", "protocols")
-                    source_boost = self._get_source_priority_boost(data_source)
-                    
-                    # Apply the boost to the score
-                    boosted_score = score * weight * source_boost
-                    
                     doc_id = str(hash(doc.page_content[:100]))
                     if doc_id in all_results:
                         # Boost score for documents found in multiple searches
                         existing_score = all_results[doc_id][1]
-                        all_results[doc_id] = (doc, max(existing_score, boosted_score) + 0.1)
+                        all_results[doc_id] = (doc, max(existing_score, score * weight) + 0.1)
                     else:
-                        all_results[doc_id] = (doc, boosted_score)
+                        all_results[doc_id] = (doc, score * weight)
                         
             except Exception as e:
                 logger.warning(f"Search failed for query '{query}': {str(e)}")
@@ -202,61 +236,6 @@ class RAGEngine:
         combined_results.sort(key=lambda x: x[1], reverse=True)
         
         return combined_results[:k]
-
-    def _get_source_priority_boost(self, data_source: str) -> float:
-        """Get priority boost multiplier based on source type for clinical queries."""
-        source_priorities = {
-            "protocols": 1.5,           # Highest priority for clinical protocols
-            "midi_zendesk_articles": 1.2,  # Medium priority for support articles
-            "midi_blog_posts": 1.0      # Standard priority for blog posts
-        }
-        return source_priorities.get(data_source, 1.0)
-
-    def _extract_relevant_section(self, content: str, max_length: int = 800) -> str:
-        """Extract relevant section starting from logical beginning points."""
-        if not content or len(content) <= max_length:
-            return content
-        
-        # Clean the content first
-        cleaned = self._clean_text(content)
-        
-        # Look for natural section breaks near the beginning
-        section_markers = [
-            '. ', '.\n', '• ', '- ', 
-            'BACKGROUND:', 'OVERVIEW:', 'SUMMARY:', 'INDICATION:', 'CRITERIA:', 
-            'CLINICAL GUIDANCE:', 'PROTOCOL:', 'RECOMMENDATION:', 'CONTRAINDICATION:',
-            'Patient should', 'Patients with', 'For patients', 'When considering'
-        ]
-        
-        # Find the best starting point (prefer beginning of sentences/sections)
-        best_start = 0
-        for marker in section_markers:
-            marker_pos = cleaned.find(marker)
-            if 0 <= marker_pos <= 100:  # Within first 100 characters
-                if marker.endswith(':'):
-                    best_start = marker_pos
-                    break
-                elif marker in ['. ', '.\n'] and marker_pos > 0:
-                    best_start = marker_pos + len(marker)
-                    break
-        
-        # Extract from best starting point
-        section_text = cleaned[best_start:]
-        
-        # If still too long, find a good ending point (complete sentences)
-        if len(section_text) > max_length:
-            # Look for sentence endings near the max length
-            cutoff = max_length
-            for i in range(max_length - 50, min(len(section_text), max_length + 100)):
-                if section_text[i:i+2] in ['. ', '.\n']:
-                    cutoff = i + 1
-                    break
-            
-            section_text = section_text[:cutoff]
-            if cutoff < len(cleaned[best_start:]):
-                section_text += "..."
-        
-        return section_text.strip()
 
     def query(self, 
               question: str, 
@@ -286,6 +265,9 @@ class RAGEngine:
                 # Clean the content text
                 cleaned_content = self._clean_text(doc.page_content)
                 
+                # Use smart excerpt extraction instead of simple truncation
+                content_excerpt = self._extract_smart_excerpt(cleaned_content, max_length=600)
+                
                 # Format filename nicely
                 formatted_filename = self._format_source_filename(doc.metadata.get("source", "Unknown"))
                 
@@ -296,11 +278,8 @@ class RAGEngine:
                 # Format source display with data source info
                 source_display = self._format_source_display(formatted_filename, data_source, content_type)
                 
-                # Extract relevant section starting from logical beginning
-                content_preview = self._extract_relevant_section(cleaned_content, max_length=800)
-                
                 sources.append({
-                    "content": content_preview,
+                    "content": content_excerpt,
                     "source": source_display,
                     "data_source": data_source,
                     "content_type": content_type,
@@ -436,8 +415,9 @@ Provide a comprehensive clinical response:"""
             answer_parts.append(f"\n**{protocol_type.replace('_', ' ').title()} Protocol Guidelines:**")
             
             for i, (content, score) in enumerate(contents[:2]):
-                preview = content[:400] + "..." if len(content) > 400 else content
-                answer_parts.append(f"\n• {preview}")
+                # Use smart excerpt instead of simple truncation
+                excerpt = self._extract_smart_excerpt(content, max_length=500)
+                answer_parts.append(f"\n• {excerpt}")
         
         answer_parts.append(f"\n\n**CLINICAL RECOMMENDATION:**")
         answer_parts.append("Review complete protocol sections and consider individual patient factors. Consult specialists when protocols indicate shared decision-making or complex medical situations.")

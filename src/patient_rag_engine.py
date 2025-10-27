@@ -16,10 +16,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).parent / 'utils'))
 
 from VectorStoreManager import VectorStoreManager
-try:
-    from langchain_core.documents import Document
-except ImportError:
-    from langchain.schema import Document
+from langchain.schema import Document
 
 # For LLM integration
 try:
@@ -40,7 +37,7 @@ class PatientRAGEngine:
     def __init__(self, 
                  vector_store_path: str = "./data/chroma_db",
                  model_provider: str = "anthropic",
-                 model_name: str = "claude-sonnet-4"):
+                 model_name: str = "claude-3-5-sonnet-20241022"):
         
         self.vector_store = VectorStoreManager(vector_store_path)
         self.model_provider = model_provider
@@ -191,6 +188,114 @@ class PatientRAGEngine:
         combined_results.sort(key=lambda x: x[1], reverse=True)
         return combined_results[:k]
 
+    def query(self, 
+              question: str, 
+              patient_context: Optional[Dict[str, Any]] = None,
+              conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        """
+        Query method for compatibility with main RAG interface.
+        Wraps the chat method and formats response for streamlit display.
+        """
+        try:
+            # Use the chat method internally
+            chat_response = self.chat(question, patient_context, conversation_history)
+            
+            # Format sources for streamlit display
+            formatted_sources = []
+            for source_info in chat_response.get('sources', []):
+                # Extract the content from the source
+                if isinstance(source_info, str):
+                    # If it's just a string, create a basic source entry
+                    formatted_sources.append({
+                        "content": "Patient guidance information",
+                        "source": source_info,
+                        "data_source": "protocols",
+                        "content_type": "patient_guidance",
+                        "protocol_type": "general",
+                        "score": 0.8
+                    })
+            
+            # If we have actual doc sources, format them properly
+            if not formatted_sources and hasattr(self, '_last_search_results'):
+                relevant_docs = getattr(self, '_last_search_results', [])
+                for doc, score in relevant_docs[:3]:
+                    cleaned_content = self._clean_text(doc.page_content)
+                    # Use smart excerpt if available
+                    if hasattr(self, '_extract_smart_excerpt'):
+                        content_excerpt = self._extract_smart_excerpt(cleaned_content, max_length=600)
+                    else:
+                        content_excerpt = cleaned_content[:600] + "..." if len(cleaned_content) > 600 else cleaned_content
+                    
+                    formatted_sources.append({
+                        "content": content_excerpt,
+                        "source": self._format_patient_source(doc),
+                        "data_source": doc.metadata.get("data_source", "protocols"),
+                        "content_type": "patient_guidance",
+                        "protocol_type": doc.metadata.get("protocol_type", "general"),
+                        "score": float(score)
+                    })
+            
+            return {
+                "answer": chat_response['response'],
+                "sources": formatted_sources,
+                "confidence": 0.8,  # Patient responses are conversational
+                "query": question,
+                "patient_context": patient_context,
+                "concern_type": chat_response.get('concern_type', 'general_support')
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in patient query: {str(e)}")
+            return {
+                "answer": "I apologize, but I'm having trouble right now. Your Midi care team is always here to help - please don't hesitate to reach out to them directly.",
+                "sources": [],
+                "confidence": 0.0,
+                "query": question,
+                "patient_context": patient_context
+            }
+
+    def _extract_smart_excerpt(self, content: str, max_length: int = 600) -> str:
+        """
+        Extract a smart excerpt that preserves sentence boundaries.
+        This is a simplified version for patient content.
+        """
+        if not content or len(content) <= max_length:
+            return content
+        
+        # Clean up the content first
+        cleaned_content = self._clean_text(content)
+        
+        if len(cleaned_content) <= max_length:
+            return cleaned_content
+        
+        # Find sentence boundaries
+        sentence_endings = ['. ', '! ', '? ']
+        
+        # Look for good cutoff point near max_length
+        best_cutoff = 0
+        search_start = max(0, max_length - 100)
+        search_end = min(len(cleaned_content), max_length + 50)
+        
+        for i in range(search_start, search_end):
+            for ending in sentence_endings:
+                if cleaned_content[i:i+len(ending)] == ending:
+                    next_pos = i + len(ending)
+                    if next_pos <= max_length + 50:
+                        best_cutoff = next_pos
+        
+        # Fallback to simple truncation if no good sentence boundary found
+        if best_cutoff == 0 or best_cutoff < max_length // 2:
+            return cleaned_content[:max_length] + "..."
+        
+        excerpt = cleaned_content[:best_cutoff].strip()
+        
+        # Add ellipsis if we cut off content and didn't end with sentence
+        if best_cutoff < len(cleaned_content):
+            if not any(excerpt.endswith(ending.strip()) for ending in sentence_endings):
+                excerpt += "..."
+        
+        return excerpt
+
     def chat(self, 
              message: str, 
              patient_context: Optional[Dict[str, Any]] = None,
@@ -210,6 +315,9 @@ class PatientRAGEngine:
             
             # Search for relevant protocol information
             relevant_docs = self._search_for_patient_guidance(message, concern_type)
+            
+            # Store search results for query method compatibility
+            self._last_search_results = relevant_docs
             
             # Generate empathetic response
             response = self._generate_patient_response(

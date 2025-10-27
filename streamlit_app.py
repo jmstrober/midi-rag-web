@@ -1,460 +1,386 @@
+#!/usr/bin/env python3
 """
-Midi RAG Web Interface
-A Streamlit web application providing both patient and clinical RAG interfaces
+Medical RAG Streamlit App
+Uses the new medical embeddings system for clinical queries
 """
 
 import streamlit as st
-import os
 import sys
 from pathlib import Path
+import os
+from datetime import datetime
 
-# Add src directory to path for imports
-src_path = Path(__file__).parent / "src"
-sys.path.append(str(src_path))
+# Add src to path
+current_dir = Path(__file__).parent
+sys.path.append(str(current_dir / "src"))
 
-from patient_rag_engine import PatientRAGEngine
 from rag_engine import RAGEngine
+from patient_rag_engine import PatientRAGEngine
 
-# Page configuration
+# Configure page
 st.set_page_config(
-    page_title="Midi RAG System",
+    page_title="MIDI Medical RAG System",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Custom CSS for better readability
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .interface-header {
-        font-size: 1.8rem;
-        color: #2e7d32;
-        border-bottom: 2px solid #2e7d32;
-        padding-bottom: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .chat-container {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-    }
-    .assistant-message {
-        background-color: #e3f2fd;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 4px solid #1976d2;
-        margin: 1rem 0;
-    }
-    .user-message {
-        background-color: #f3e5f5;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 4px solid #7b1fa2;
-        margin: 1rem 0;
-        text-align: left;
-    }
-    .confidence-score {
-        background-color: #fff3e0;
-        padding: 0.5rem;
-        border-radius: 5px;
-        font-size: 0.9rem;
-        margin-bottom: 1rem;
-    }
-    .warning-box {
-        background-color: #fff8e1;
-        border: 1px solid #ffb74d;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-    .source-content {
-        background-color: #ffffff;
-        border: 2px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        line-height: 1.5;
-        color: #2c3e50;
-        font-size: 0.9rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .source-header {
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 6px 6px 0 0;
-        padding: 0.5rem 1rem;
-        margin: 0;
-        font-weight: 600;
-        color: #495057;
-        font-size: 0.85rem;
-        border-bottom: none;
-    }
-    .source-content-with-header {
-        background-color: #ffffff;
-        border: 1px solid #dee2e6;
-        border-radius: 0 0 6px 6px;
-        padding: 1rem;
-        margin: 0 0 1rem 0;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        line-height: 1.6;
-        color: #2c3e50;
-        font-size: 0.9rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        white-space: pre-wrap;
-        word-wrap: break-word;
-    }
-</style>""", unsafe_allow_html=True)
+.source-container {
+    background-color: #f8f9fa;
+    border-left: 4px solid #007bff;
+    padding: 15px;
+    margin: 10px 0;
+    border-radius: 0 8px 8px 0;
+}
 
-def check_password(interface_type):
-    """Check password for the given interface type"""
-    if interface_type == "patient":
-        correct_password = st.secrets.get("PATIENT_PASSWORD", "midi-patient-2025")
-        session_key = "patient_authenticated"
-        title = "Patient Interface Access"
-    else:
-        correct_password = st.secrets.get("CLINICAL_PASSWORD", "midi-clinical-2025")
-        session_key = "clinical_authenticated"
-        title = "Clinical Interface Access"
-    
-    # Check if already authenticated
-    if st.session_state.get(session_key, False):
-        return True
-    
-    # Show password input
-    st.markdown(f"### 🔒 {title}")
-    st.markdown("Please enter the password to access this interface:")
-    
-    password = st.text_input("Password", type="password", key=f"{interface_type}_password")
-    
-    if st.button(f"Access {interface_type.title()} Interface", key=f"{interface_type}_login"):
-        if password == correct_password:
-            st.session_state[session_key] = True
-            st.success(f"✅ Access granted to {interface_type} interface!")
-            st.rerun()
-        else:
-            st.error("❌ Invalid password. Please try again.")
-    
-    return False
+.source-title {
+    font-weight: bold;
+    color: #007bff;
+    margin-bottom: 8px;
+    font-size: 1.1em;
+}
 
-@st.cache_resource
-def load_patient_rag():
-    """Load and cache the patient RAG engine"""
+.source-content {
+    color: #495057;
+    line-height: 1.6;
+    background-color: white;
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+}
+
+.medical-badge {
+    background-color: #28a745;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    margin-right: 8px;
+}
+
+.test-results {
+    background-color: #e7f3ff;
+    border: 1px solid #b3d9ff;
+    padding: 15px;
+    border-radius: 8px;
+    margin: 10px 0;
+}
+</style>
+""", unsafe_allow_html=True)
+
+def initialize_engines():
+    """Initialize both RAG engines."""
     try:
-        engine = PatientRAGEngine()
-        return engine
+        clinical_engine = RAGEngine()
+        patient_engine = PatientRAGEngine()
+        return clinical_engine, patient_engine
     except Exception as e:
-        st.error(f"Error loading Patient RAG engine: {str(e)}")
-        return None
+        st.error(f"Failed to initialize RAG engines: {e}")
+        return None, None
 
-@st.cache_resource
-def load_clinical_rag():
-    """Load and cache the clinical RAG engine"""
-    try:
-        engine = RAGEngine()
-        return engine
-    except Exception as e:
-        st.error(f"Error loading Clinical RAG engine: {str(e)}")
-        return None
-
-def patient_interface():
-    """Patient-facing RAG interface"""
-    st.markdown('<div class="interface-header">💬 MidiChat - Your Personal Health Companion</div>', unsafe_allow_html=True)
-    
-    # Load patient RAG engine
-    patient_rag = load_patient_rag()
-    if not patient_rag:
-        st.error("Unable to load patient interface. Please try again later.")
+def display_sources_with_scores(sources, interface_type="patient"):
+    """Display sources with improved formatting."""
+    if not sources:
+        st.warning("No sources found.")
         return
     
-    # Display connection status
-    try:
-        doc_count = patient_rag.vector_store.collection.count()
-        st.success(f"✅ Ready to chat! (Connected to {doc_count} documents)")
-    except Exception as e:
-        st.success("✅ Ready to chat! (Vector store connected)")
+    # Filter to show only protocols for clinical interface
+    if interface_type == "clinical":
+        sources = [s for s in sources if 'protocol' in s.get('source', '').lower()]
+        if not sources:
+            st.warning("No protocol sources found for this query.")
+            return
     
-    # Chat interface
-    st.markdown("---")
-    st.markdown("### Ask your health question:")
+    st.markdown("### 📚 Sources")
     
-    # Initialize chat history
-    if "patient_messages" not in st.session_state:
-        st.session_state.patient_messages = []
-    
-    # Chat input using form (better for clearing)
-    with st.form("patient_question_form", clear_on_submit=True):
-        user_question = st.text_area(
-            "Enter your question for Midibot here:",
-            height=100,
-            placeholder="Feel free to share what's on your mind - whether it's symptoms, concerns, questions about treatment, or anything else."
-        )
+    for i, source in enumerate(sources, 1):
+        # Extract metadata
+        source_name = source.get('source', f'Source {i}')
+        content = source.get('content', 'No content available')
+        section = source.get('metadata', {}).get('clinical_section', 'general')
+        concepts = source.get('metadata', {}).get('medical_concepts', [])
         
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            submitted = st.form_submit_button("Send Question", type="primary")
-        with col2:
-            if st.form_submit_button("Clear Chat"):
-                st.session_state.patient_messages = []
-                st.rerun()
-    
-    # Process the question if form was submitted
-    if submitted and user_question.strip():
-        # Add user message to history
-        st.session_state.patient_messages.append({"role": "user", "content": user_question})
-        
-        # Get response from patient RAG
-        with st.spinner("Thinking..."):
-            try:
-                result = patient_rag.chat(user_question)
-                # Extract just the response text from the result dictionary
-                if isinstance(result, dict) and 'response' in result:
-                    response = result['response']
-                else:
-                    response = str(result)
-                st.session_state.patient_messages.append({"role": "assistant", "content": response})
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error getting response: {str(e)}")
-    
-    # Display chat history (most recent first, but question before answer within each pair)
-    if st.session_state.patient_messages:
-        st.markdown("### Chat History:")
-        
-        # Group messages into Q&A pairs and reverse the pairs order
-        messages = st.session_state.patient_messages
-        qa_pairs = []
-        
-        for i in range(0, len(messages), 2):
-            if i + 1 < len(messages):
-                # We have both question and answer
-                qa_pairs.append((messages[i], messages[i + 1]))
-            else:
-                # We have just a question (waiting for answer)
-                qa_pairs.append((messages[i], None))
-        
-        # Display pairs in reverse order (most recent first)
-        for question_msg, answer_msg in reversed(qa_pairs):
-            # Display question first
-            if question_msg["role"] == "user":
-                st.markdown(f'<div class="user-message"><strong>You:</strong> {question_msg["content"]}</div>', unsafe_allow_html=True)
+        # Create source container
+        with st.container():
+            col1, col2 = st.columns([3, 1])
             
-            # Then display answer (if it exists)
-            if answer_msg and answer_msg["role"] == "assistant":
-                st.markdown(f'<div class="assistant-message"><strong>MidiBot:</strong> {answer_msg["content"]}</div>', unsafe_allow_html=True)
+            with col1:
+                st.markdown(f"""
+                <div class="source-container">
+                    <div class="source-title">
+                        🏥 {source_name}
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <span class="medical-badge">Section: {section}</span>
+                    </div>
+                    <div class="source-content">
+                        {content}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                if concepts:
+                    st.markdown("**Medical Concepts:**")
+                    for concept in concepts[:5]:  # Show first 5 concepts
+                        st.markdown(f"• {concept}")
 
-def clinical_interface():
-    """Clinical-facing RAG interface"""
-    st.markdown('<div class="interface-header">🏥 Midi Clinical Protocol RAG System</div>', unsafe_allow_html=True)
-    
-    # Load clinical RAG engine
-    clinical_rag = load_clinical_rag()
-    if not clinical_rag:
-        st.error("Unable to load clinical interface. Please try again later.")
+def display_sources_with_scores(sources, interface_type="patient"):
+    """Display sources with improved formatting."""
+    if not sources:
+        st.warning("No sources found.")
         return
     
-    # Display system info
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        try:
-            doc_count = clinical_rag.vector_store.collection.count()
-            st.metric("📊 Documents", f"{doc_count}")
-        except Exception:
-            st.metric("📊 Documents", "Connected")
-    with col2:
-        st.metric("🧠 Model", "Claude Sonnet 4")
-    with col3:
-        st.metric("🔑 LLM Status", "✅ Available" if clinical_rag.client else "❌ Unavailable")
+    # Filter to show only protocols for clinical interface
+    if interface_type == "clinical":
+        sources = [s for s in sources if 'protocol' in s.get('source', '').lower()]
+        if not sources:
+            st.warning("No protocol sources found for this query.")
+            return
     
-    # Available protocol types
-    protocol_types = ["menopause", "weight_management", "diabetes", "thyroid", "sleep", "general"]
-    st.info(f"📋 Available Protocol Types: {', '.join(protocol_types)}")
+    st.markdown("### 📚 Sources")
     
-    # Clinical query interface
-    st.markdown("---")
-    st.markdown("### Clinical Question:")
-    
-    # Initialize clinical chat history
-    if "clinical_messages" not in st.session_state:
-        st.session_state.clinical_messages = []
-    
-    # Clinical input using form (better for clearing)
-    with st.form("clinical_question_form", clear_on_submit=True):
-        clinical_question = st.text_area(
-            "Enter your clinical question:",
-            height=100,
-            placeholder="Ask about clinical protocols, treatment guidelines, contraindications, etc."
-        )
+    for i, source in enumerate(sources, 1):
+        # Extract metadata
+        source_name = source.get('source', f'Source {i}')
+        content = source.get('content', 'No content available')
+        section = source.get('metadata', {}).get('clinical_section', 'general')
+        concepts = source.get('metadata', {}).get('medical_concepts', [])
         
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            submitted = st.form_submit_button("Search Protocols", type="primary")
-        with col2:
-            if st.form_submit_button("Clear History"):
-                st.session_state.clinical_messages = []
-                st.rerun()
-    
-    # Process the question if form was submitted
-    if submitted and clinical_question.strip():
-        # Add user message to history
-        st.session_state.clinical_messages.append({"role": "user", "content": clinical_question})
-        
-        # Get response from clinical RAG
-        with st.spinner("🔍 Searching protocols..."):
-            try:
-                result = clinical_rag.query(clinical_question)
-                
-                # Display confidence score
-                confidence = result.get("confidence", 0)
-                confidence_color = "#4caf50" if confidence > 0.7 else "#ff9800" if confidence > 0.4 else "#f44336"
-                
-                response_data = {
-                    "role": "assistant",
-                    "content": result["answer"],
-                    "confidence": confidence,
-                    "sources": result.get("sources", [])
-                }
-                st.session_state.clinical_messages.append(response_data)
-                
-            except Exception as e:
-                st.error(f"Error getting response: {str(e)}")
-    
-    # Display clinical chat history (most recent first, but question before answer within each pair)
-    if st.session_state.clinical_messages:
-        st.markdown("### Clinical Responses:")
-        
-        # Group messages into Q&A pairs and reverse the pairs order
-        messages = st.session_state.clinical_messages
-        qa_pairs = []
-        
-        for i in range(0, len(messages), 2):
-            if i + 1 < len(messages):
-                # We have both question and answer
-                qa_pairs.append((messages[i], messages[i + 1]))
-            else:
-                # We have just a question (waiting for answer)
-                qa_pairs.append((messages[i], None))
-        
-        # Display pairs in reverse order (most recent first)
-        for question_msg, answer_msg in reversed(qa_pairs):
-            # Display question first
-            if question_msg["role"] == "user":
-                st.markdown(f'<div class="user-message"><strong>Clinical Question:</strong> {question_msg["content"]}</div>', unsafe_allow_html=True)
+        # Create source container
+        with st.container():
+            col1, col2 = st.columns([3, 1])
             
-            # Then display answer (if it exists)
-            if answer_msg and answer_msg["role"] == "assistant":
-                # Show confidence score
-                confidence = answer_msg.get("confidence", 0)
-                confidence_color = "#4caf50" if confidence > 0.7 else "#ff9800" if confidence > 0.4 else "#f44336"
-                st.markdown(f'<div class="confidence-score">📋 <strong>Confidence Score:</strong> <span style="color: {confidence_color};">{confidence:.2f}</span></div>', unsafe_allow_html=True)
-                
-                # Show answer
-                st.markdown(f'<div class="assistant-message">{answer_msg["content"]}</div>', unsafe_allow_html=True)
-                
-                # Show sources if available
-                sources = answer_msg.get("sources", [])
-                if sources:
-                    with st.expander(f"📚 View Sources ({len(sources)} found)"):
-                        for i, source in enumerate(sources, 1):
-                            # Format like CLI: filename (protocol_type) - Score: confidence
-                            source_title = source.get('source', 'Unknown')
-                            protocol_type = source.get('protocol_type', 'general')
-                            confidence = source.get('confidence_score', 0)
-                            data_source = source.get('data_source', 'unknown')
-                            
-                            # Clean up source title for better display
-                            if source_title.startswith('📋 Clinical Protocol: '):
-                                display_title = source_title.replace('📋 Clinical Protocol: ', '')
-                            elif source_title.startswith('📰 Midi Blog: '):
-                                display_title = source_title.replace('📰 Midi Blog: ', '')
-                            elif source_title.startswith('❓ Support Article: '):
-                                display_title = source_title.replace('❓ Support Article: ', '')
-                            else:
-                                display_title = source_title
-                            
-                            # Format header like CLI
-                            st.markdown(f"**{i}. {display_title}** ({protocol_type}) - Score: {confidence:.3f}")
-                            st.markdown(f"*Data Source: {data_source}*")
-                            
-                            # Show full content with better styling for readability
-                            if source.get("content"):
-                                content = source["content"]
-                                # Use custom styled HTML for better readability
-                                st.markdown(
-                                    f'<div class="source-header">Content from source {i}:</div>',
-                                    unsafe_allow_html=True
-                                )
-                                st.markdown(
-                                    f'<div class="source-content-with-header">{content}</div>',
-                                    unsafe_allow_html=True
-                                )
-                            
-                            if i < len(sources):  # Add separator between sources except for last one
-                                st.markdown("---")
+            with col1:
+                st.markdown(f"""
+                <div class="source-container">
+                    <div class="source-title">
+                        🏥 {source_name}
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <span class="medical-badge">Section: {section}</span>
+                    </div>
+                    <div class="source-content">
+                        {content}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                if concepts:
+                    st.markdown("**Medical Concepts:**")
+                    for concept in concepts[:5]:  # Show first 5 concepts
+                        st.markdown(f"• {concept}")
 
 def main():
-    """Main application"""
-    # Header
-    st.markdown('<div class="main-header">🏥 Midi RAG System</div>', unsafe_allow_html=True)
+    """Main Streamlit app."""
+    
+    st.title("🏥 MIDI Medical RAG System")
+    
+    # Initialize session state for authentication
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'interface_type' not in st.session_state:
+        st.session_state.interface_type = "Patient Interface"
+    if 'current_authenticated_interface' not in st.session_state:
+        st.session_state.current_authenticated_interface = None
+    
+    # Initialize conversation history
+    if 'conversation_history' not in st.session_state:
+        st.session_state.conversation_history = []
+    if 'conversation_context' not in st.session_state:
+        st.session_state.conversation_context = ""
     
     # Sidebar for interface selection
-    st.sidebar.title("🔧 Interface Selection")
-    interface_choice = st.sidebar.radio(
+    st.sidebar.title("🏥 MIDI Medical RAG")
+    st.sidebar.markdown("### Interface Selection")
+    
+    # Interface selection with radio buttons
+    selected_interface = st.sidebar.radio(
         "Choose Interface:",
         ["Patient Interface", "Clinical Interface"],
-        help="Select the appropriate interface for your role"
+        index=0 if st.session_state.interface_type == "Patient Interface" else 1
     )
     
-    # Add logout buttons
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Logout Patient"):
-        st.session_state.patient_authenticated = False
-        st.session_state.patient_messages = []
+    # Check if interface has changed
+    if selected_interface != st.session_state.interface_type:
+        st.session_state.interface_type = selected_interface
+        st.session_state.authenticated = False
+        st.session_state.current_authenticated_interface = None
+        # Clear conversation when switching interfaces
+        st.session_state.conversation_history = []
+        st.session_state.conversation_context = ""
+        st.rerun()
     
-    if st.sidebar.button("🚪 Logout Clinical"):
-        st.session_state.clinical_authenticated = False
-        st.session_state.clinical_messages = []
+    # Initialize engines
+    clinical_engine, patient_engine = initialize_engines()
     
-    # Information section
-    with st.sidebar.expander("ℹ️ About This System"):
-        st.markdown("""
-        **Midi RAG System** provides two specialized interfaces:
+    # Authentication logic
+    if not st.session_state.authenticated or st.session_state.current_authenticated_interface != selected_interface:
+        st.markdown("---")
         
-        **Patient Interface:**
-        - Conversational health support
-        - Educational information
-        - Treatment guidance
+        if selected_interface == "Patient Interface":
+            st.markdown("### 💬 Patient Interface")
+            st.markdown("*Patient-friendly explanations and guidance*")
+            required_password = "midi-patient-2025"
+            
+        else:  # Clinical Interface
+            st.markdown("### 🩺 Clinical Interface")
+            st.markdown("*Specialized medical queries with protocol prioritization*")
+            required_password = "midi-clinical-2025"
         
-        **Clinical Interface:**
-        - Protocol searches
-        - Evidence-based guidelines
-        - Confidence scoring
-        - Source documentation
-        """)
+        # Password input
+        password = st.text_input(
+            f"Enter {selected_interface.lower()} password:",
+            type="password",
+            key=f"password_{selected_interface}"
+        )
+        
+        if password:
+            if password == required_password:
+                st.session_state.authenticated = True
+                st.session_state.current_authenticated_interface = selected_interface
+                st.success(f"✅ Access granted to {selected_interface.lower()}")
+                st.rerun()
+            else:
+                st.error("❌ Incorrect password. Please try again.")
+        else:
+            st.info(f"Please enter the password to access the {selected_interface.lower()}.")
+        
+        return
     
-    # Route to appropriate interface
-    if interface_choice == "Patient Interface":
-        if check_password("patient"):
-            patient_interface()
-    else:
-        if check_password("clinical"):
-            clinical_interface()
+    # Main interface (authenticated)
+    if selected_interface == "Clinical Interface":
+        if not clinical_engine:
+            st.error("Clinical engine not available")
+            return
+        current_engine = clinical_engine
+        placeholder_text = "Enter your clinical question (e.g., 'What are contraindications for HRT in breast cancer survivors?')"
+        
+    else:  # Patient Interface
+        if not patient_engine:
+            st.error("Patient engine not available")
+            return
+        current_engine = patient_engine
+        placeholder_text = "Ask your health question (e.g., 'What symptoms might I experience during menopause?')"
     
-    # Footer
+    # Conversation interface
     st.markdown("---")
-    st.markdown(
-        "<div style='text-align: center; color: #666; font-size: 0.9rem;'>"
-        "Midi RAG System - Powered by Claude Sonnet 4 & ChromaDB"
-        "</div>",
-        unsafe_allow_html=True
-    )
+    
+    # Create two columns for layout - question input and reset button at top
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.markdown("### ❓ Ask a Question")
+    
+    with col2:
+        if st.button("🔄 Reset", use_container_width=True, help="Clear conversation and start fresh"):
+            st.session_state.conversation_history = []
+            st.session_state.conversation_context = ""
+            st.rerun()
+    
+    # Determine if this is a follow-up
+    is_followup = len(st.session_state.conversation_history) > 0
+    
+    if is_followup:
+        st.info("💡 You can ask follow-up questions based on our previous conversation, or use Reset to start fresh.")
+    
+    # Query input form - ALWAYS at the top
+    with st.form("query_form", clear_on_submit=True):
+        query = st.text_area(
+            "Your Question:" if not is_followup else "Your Follow-up Question:",
+            placeholder=placeholder_text if not is_followup else "Ask a follow-up question about the previous topic...",
+            height=100
+        )
+        
+        submit = st.form_submit_button("🔍 Search", use_container_width=True)
+    
+    # Process query
+    if submit and query.strip():
+        with st.spinner("🔍 Searching medical knowledge base..."):
+            try:
+                # Build context-aware query for follow-ups
+                if is_followup and st.session_state.conversation_context:
+                    # Get last 2 Q&As for context
+                    recent_context = st.session_state.conversation_history[-2:]
+                    context_summary = []
+                    
+                    for conv in recent_context:
+                        context_summary.append(f"Previous Q: {conv['question']}")
+                        context_summary.append(f"Previous A: {conv['answer'][:200]}...")
+                    
+                    enhanced_query = f"Follow-up question context:\n{chr(10).join(context_summary)}\n\nCurrent question: {query}"
+                else:
+                    enhanced_query = query
+                
+                response = current_engine.query(enhanced_query)
+                
+                # Store conversation
+                conversation_entry = {
+                    "question": query,
+                    "answer": response['answer'],
+                    "sources": response.get('sources', []),
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                st.session_state.conversation_history.append(conversation_entry)
+                
+                # Update conversation context
+                if len(st.session_state.conversation_history) > 3:
+                    # Keep only last 3 conversations for context
+                    st.session_state.conversation_history = st.session_state.conversation_history[-3:]
+                
+                # Display the current answer immediately
+                st.markdown("## 💡 Latest Answer")
+                st.markdown(response['answer'])
+                
+                # Display sources for current answer - only for clinical interface
+                if response.get('sources') and selected_interface == "Clinical Interface":
+                    interface_for_sources = "clinical"
+                    display_sources_with_scores(response['sources'], interface_for_sources)
+                
+                # Rerun to update conversation history display
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+                st.info("Please try rephrasing your question or contact support.")
+    
+    # Display conversation history BELOW the input (if any exists)
+    if st.session_state.conversation_history:
+        st.markdown("---")
+        st.markdown("### 📜 Previous Questions & Answers")
+        
+        # Create scrollable container for conversation history
+        with st.container():
+            # Display conversations in reverse order (most recent first)
+            for i, conversation in enumerate(reversed(st.session_state.conversation_history)):
+                with st.expander(f"Q{len(st.session_state.conversation_history) - i}: {conversation['question'][:80]}...", expanded=(i == 0)):
+                    st.markdown(f"**Question:** {conversation['question']}")
+                    st.markdown(f"**Answer:** {conversation['answer']}")
+                    
+                    # Only show sources for clinical interface
+                    if conversation.get('sources') and selected_interface == "Clinical Interface":
+                        interface_for_sources = "clinical"
+                        display_sources_with_scores(conversation['sources'], interface_for_sources)
+    
+    # Sidebar information
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📋 Current Interface")
+    st.sidebar.info(f"✅ {selected_interface}")
+    
+    if selected_interface == "Clinical Interface":
+        st.sidebar.markdown("### 🎯 Clinical Features")
+        st.sidebar.markdown(
+            "• Protocol prioritization\n"
+            "• Medical terminology\n"
+            "• Clinical context\n"
+            "• Contraindication detection\n"
+            "• Dosing guidance"
+        )
 
 if __name__ == "__main__":
     main()
