@@ -324,7 +324,7 @@ def clinical_interface():
                 if sources:
                     with st.expander("📚 View Sources"):
                         for i, source in enumerate(sources, 1):
-                            st.markdown(f"**{i}. {source.get('title', 'Unknown')}** (Score: {source.get('score', 'N/A')})")
+                            st.markdown(f"**{i}. {source.get('source', 'Unknown')}** (Score: {source.get('confidence_score', 'N/A'):.3f})")
                             if source.get("content"):
                                 st.text(source["content"][:300] + "..." if len(source["content"]) > 300 else source["content"])
                             st.markdown("---")
