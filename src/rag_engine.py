@@ -157,7 +157,7 @@ class RAGEngine:
         return base_queries
 
     def _comprehensive_search(self, question: str, k: int = 15, protocol_type: Optional[str] = None) -> List[tuple]:
-        """Perform comprehensive search using multiple strategies."""
+        """Perform comprehensive search using multiple strategies with source prioritization."""
         
         search_filter = {"protocol_type": protocol_type} if protocol_type else None
         all_results = {}
@@ -178,13 +178,20 @@ class RAGEngine:
                 weight = 1.0 if i == 0 else 0.7
                 
                 for doc, score in results:
+                    # Apply source type prioritization boost
+                    data_source = doc.metadata.get("data_source", "protocols")
+                    source_boost = self._get_source_priority_boost(data_source)
+                    
+                    # Apply the boost to the score
+                    boosted_score = score * weight * source_boost
+                    
                     doc_id = str(hash(doc.page_content[:100]))
                     if doc_id in all_results:
                         # Boost score for documents found in multiple searches
                         existing_score = all_results[doc_id][1]
-                        all_results[doc_id] = (doc, max(existing_score, score * weight) + 0.1)
+                        all_results[doc_id] = (doc, max(existing_score, boosted_score) + 0.1)
                     else:
-                        all_results[doc_id] = (doc, score * weight)
+                        all_results[doc_id] = (doc, boosted_score)
                         
             except Exception as e:
                 logger.warning(f"Search failed for query '{query}': {str(e)}")
@@ -195,6 +202,15 @@ class RAGEngine:
         combined_results.sort(key=lambda x: x[1], reverse=True)
         
         return combined_results[:k]
+
+    def _get_source_priority_boost(self, data_source: str) -> float:
+        """Get priority boost multiplier based on source type for clinical queries."""
+        source_priorities = {
+            "protocols": 1.5,           # Highest priority for clinical protocols
+            "midi_zendesk_articles": 1.2,  # Medium priority for support articles
+            "midi_blog_posts": 1.0      # Standard priority for blog posts
+        }
+        return source_priorities.get(data_source, 1.0)
 
     def query(self, 
               question: str, 
