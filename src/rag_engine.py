@@ -141,7 +141,7 @@ class RAGEngine:
         return base_queries
 
     def _comprehensive_search(self, question: str, k: int = 15, protocol_type: Optional[str] = None) -> List[tuple]:
-        """Perform comprehensive search using multiple strategies."""
+        """Perform comprehensive search using multiple strategies and get more complete content."""
         
         search_filter = {"protocol_type": protocol_type} if protocol_type else None
         all_results = {}
@@ -149,12 +149,12 @@ class RAGEngine:
         # Get enhanced queries
         search_queries = self._enhance_query_for_comprehensive_search(question)
         
-        # Search with all queries
+        # Search with all queries - increase k to get more diverse results
         for i, query in enumerate(search_queries):
             try:
                 results = self.vector_store.search_with_scores(
                     query=query,
-                    k=k,
+                    k=k + 5,  # Get extra results for diversity
                     filter_dict=search_filter
                 )
                 
@@ -162,7 +162,11 @@ class RAGEngine:
                 weight = 1.0 if i == 0 else 0.7
                 
                 for doc, score in results:
-                    doc_id = str(hash(doc.page_content[:100]))
+                    # Use source file + chunk info for better deduplication
+                    source_file = doc.metadata.get('source', 'unknown')
+                    chunk_index = doc.metadata.get('chunk_index', 0)
+                    doc_id = f"{source_file}_{chunk_index}"
+                    
                     if doc_id in all_results:
                         # Boost score for documents found in multiple searches
                         existing_score = all_results[doc_id][1]
@@ -174,11 +178,25 @@ class RAGEngine:
                 logger.warning(f"Search failed for query '{query}': {str(e)}")
                 continue
         
-        # Sort by combined score and return top results
+        # Sort by combined score and return top results, but ensure diversity
         combined_results = list(all_results.values())
         combined_results.sort(key=lambda x: x[1], reverse=True)
         
-        return combined_results[:k]
+        # Take top results but ensure we have content from different sources
+        final_results = []
+        seen_sources = set()
+        
+        for doc, score in combined_results:
+            source_file = doc.metadata.get('source', 'unknown')
+            # Take up to 2 chunks per source file for diversity
+            source_count = len([s for s in seen_sources if s == source_file])
+            if source_count < 2 or len(final_results) < k//2:
+                final_results.append((doc, score))
+                seen_sources.add(source_file)
+                if len(final_results) >= k:
+                    break
+        
+        return final_results
 
     def query(self, 
               question: str, 
@@ -218,11 +236,24 @@ class RAGEngine:
                 # Format source display with data source info
                 source_display = self._format_source_display(formatted_filename, data_source, content_type)
                 
-                # Show more text in preview - increase from 200 to 400 characters
-                preview_length = 400
+                # Show substantial text for meaningful context - increased from 400 to 1200 characters
+                preview_length = 1200
                 content_preview = cleaned_content[:preview_length]
+                
+                # Try to end at a sentence boundary to avoid cutting mid-sentence
                 if len(cleaned_content) > preview_length:
-                    content_preview += "..."
+                    # Look for sentence endings within the last 100 characters
+                    last_period = content_preview.rfind('. ')
+                    last_exclamation = content_preview.rfind('! ')
+                    last_question = content_preview.rfind('? ')
+                    
+                    # Find the latest sentence ending
+                    sentence_end = max(last_period, last_exclamation, last_question)
+                    
+                    if sentence_end > preview_length - 200:  # If we found a good break point
+                        content_preview = content_preview[:sentence_end + 2]  # Include the space after punctuation
+                    else:
+                        content_preview += "..."
                 
                 sources.append({
                     "content": content_preview,
@@ -361,7 +392,22 @@ Provide a comprehensive clinical response:"""
             answer_parts.append(f"\n**{protocol_type.replace('_', ' ').title()} Protocol Guidelines:**")
             
             for i, (content, score) in enumerate(contents[:2]):
-                preview = content[:400] + "..." if len(content) > 400 else content
+                # Increase preview length and improve sentence boundaries
+                preview_length = 1200
+                preview = content[:preview_length]
+                
+                # Try to end at a sentence boundary
+                if len(content) > preview_length:
+                    last_period = preview.rfind('. ')
+                    last_exclamation = preview.rfind('! ')
+                    last_question = preview.rfind('? ')
+                    sentence_end = max(last_period, last_exclamation, last_question)
+                    
+                    if sentence_end > preview_length - 200:
+                        preview = preview[:sentence_end + 2]
+                    else:
+                        preview += "..."
+                
                 answer_parts.append(f"\n• {preview}")
         
         answer_parts.append(f"\n\n**CLINICAL RECOMMENDATION:**")
