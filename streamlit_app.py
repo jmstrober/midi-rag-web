@@ -74,8 +74,44 @@ st.markdown("""
         border-radius: 8px;
         margin: 1rem 0;
     }
-</style>
-""", unsafe_allow_html=True)
+    .source-content {
+        background-color: #ffffff;
+        border: 2px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.5;
+        color: #2c3e50;
+        font-size: 0.9rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .source-header {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 6px 6px 0 0;
+        padding: 0.5rem 1rem;
+        margin: 0;
+        font-weight: 600;
+        color: #495057;
+        font-size: 0.85rem;
+        border-bottom: none;
+    }
+    .source-content-with-header {
+        background-color: #ffffff;
+        border: 1px solid #dee2e6;
+        border-radius: 0 0 6px 6px;
+        padding: 1rem;
+        margin: 0 0 1rem 0;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.6;
+        color: #2c3e50;
+        font-size: 0.9rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+</style>""", unsafe_allow_html=True)
 
 def check_password(interface_type):
     """Check password for the given interface type"""
@@ -347,16 +383,17 @@ def clinical_interface():
                             st.markdown(f"**{i}. {display_title}** ({protocol_type}) - Score: {confidence:.3f}")
                             st.markdown(f"*Data Source: {data_source}*")
                             
-                            # Show full content like CLI (already truncated by RAG engine)
+                            # Show full content with better styling for readability
                             if source.get("content"):
                                 content = source["content"]
-                                # Use code block for better formatting and readability
-                                st.text_area(
-                                    f"Content from source {i}:",
-                                    content,
-                                    height=150,
-                                    key=f"source_content_{i}_{hash(content[:50])}",
-                                    disabled=True
+                                # Use custom styled HTML for better readability
+                                st.markdown(
+                                    f'<div class="source-header">Content from source {i}:</div>',
+                                    unsafe_allow_html=True
+                                )
+                                st.markdown(
+                                    f'<div class="source-content-with-header">{content}</div>',
+                                    unsafe_allow_html=True
                                 )
                             
                             if i < len(sources):  # Add separator between sources except for last one
