@@ -249,43 +249,46 @@ def clinical_interface():
     if "clinical_messages" not in st.session_state:
         st.session_state.clinical_messages = []
     
-    clinical_question = st.text_area(
-        "Enter your clinical question:",
-        height=100,
-        placeholder="Ask about clinical protocols, treatment guidelines, contraindications, etc."
-    )
+    # Clinical input using form (better for clearing)
+    with st.form("clinical_question_form", clear_on_submit=True):
+        clinical_question = st.text_area(
+            "Enter your clinical question:",
+            height=100,
+            placeholder="Ask about clinical protocols, treatment guidelines, contraindications, etc."
+        )
+        
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            submitted = st.form_submit_button("Search Protocols", type="primary")
+        with col2:
+            if st.form_submit_button("Clear History"):
+                st.session_state.clinical_messages = []
+                st.rerun()
     
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        if st.button("Search Protocols", type="primary"):
-            if clinical_question.strip():
-                # Add user message to history
-                st.session_state.clinical_messages.append({"role": "user", "content": clinical_question})
+    # Process the question if form was submitted
+    if submitted and clinical_question.strip():
+        # Add user message to history
+        st.session_state.clinical_messages.append({"role": "user", "content": clinical_question})
+        
+        # Get response from clinical RAG
+        with st.spinner("🔍 Searching protocols..."):
+            try:
+                result = clinical_rag.query(clinical_question)
                 
-                # Get response from clinical RAG
-                with st.spinner("🔍 Searching protocols..."):
-                    try:
-                        result = clinical_rag.query(clinical_question)
-                        
-                        # Display confidence score
-                        confidence = result.get("confidence", 0)
-                        confidence_color = "#4caf50" if confidence > 0.7 else "#ff9800" if confidence > 0.4 else "#f44336"
-                        
-                        response_data = {
-                            "role": "assistant",
-                            "content": result["answer"],
-                            "confidence": confidence,
-                            "sources": result.get("sources", [])
-                        }
-                        st.session_state.clinical_messages.append(response_data)
-                        
-                    except Exception as e:
-                        st.error(f"Error getting response: {str(e)}")
-    
-    with col2:
-        if st.button("Clear History"):
-            st.session_state.clinical_messages = []
-            st.rerun()
+                # Display confidence score
+                confidence = result.get("confidence", 0)
+                confidence_color = "#4caf50" if confidence > 0.7 else "#ff9800" if confidence > 0.4 else "#f44336"
+                
+                response_data = {
+                    "role": "assistant",
+                    "content": result["answer"],
+                    "confidence": confidence,
+                    "sources": result.get("sources", [])
+                }
+                st.session_state.clinical_messages.append(response_data)
+                
+            except Exception as e:
+                st.error(f"Error getting response: {str(e)}")
     
     # Display clinical chat history (most recent first, but question before answer within each pair)
     if st.session_state.clinical_messages:
