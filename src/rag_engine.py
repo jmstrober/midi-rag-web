@@ -212,6 +212,52 @@ class RAGEngine:
         }
         return source_priorities.get(data_source, 1.0)
 
+    def _extract_relevant_section(self, content: str, max_length: int = 800) -> str:
+        """Extract relevant section starting from logical beginning points."""
+        if not content or len(content) <= max_length:
+            return content
+        
+        # Clean the content first
+        cleaned = self._clean_text(content)
+        
+        # Look for natural section breaks near the beginning
+        section_markers = [
+            '. ', '.\n', '• ', '- ', 
+            'BACKGROUND:', 'OVERVIEW:', 'SUMMARY:', 'INDICATION:', 'CRITERIA:', 
+            'CLINICAL GUIDANCE:', 'PROTOCOL:', 'RECOMMENDATION:', 'CONTRAINDICATION:',
+            'Patient should', 'Patients with', 'For patients', 'When considering'
+        ]
+        
+        # Find the best starting point (prefer beginning of sentences/sections)
+        best_start = 0
+        for marker in section_markers:
+            marker_pos = cleaned.find(marker)
+            if 0 <= marker_pos <= 100:  # Within first 100 characters
+                if marker.endswith(':'):
+                    best_start = marker_pos
+                    break
+                elif marker in ['. ', '.\n'] and marker_pos > 0:
+                    best_start = marker_pos + len(marker)
+                    break
+        
+        # Extract from best starting point
+        section_text = cleaned[best_start:]
+        
+        # If still too long, find a good ending point (complete sentences)
+        if len(section_text) > max_length:
+            # Look for sentence endings near the max length
+            cutoff = max_length
+            for i in range(max_length - 50, min(len(section_text), max_length + 100)):
+                if section_text[i:i+2] in ['. ', '.\n']:
+                    cutoff = i + 1
+                    break
+            
+            section_text = section_text[:cutoff]
+            if cutoff < len(cleaned[best_start:]):
+                section_text += "..."
+        
+        return section_text.strip()
+
     def query(self, 
               question: str, 
               patient_context: Optional[Dict[str, Any]] = None,
@@ -250,11 +296,8 @@ class RAGEngine:
                 # Format source display with data source info
                 source_display = self._format_source_display(formatted_filename, data_source, content_type)
                 
-                # Show more text in preview - increase from 200 to 400 characters
-                preview_length = 400
-                content_preview = cleaned_content[:preview_length]
-                if len(cleaned_content) > preview_length:
-                    content_preview += "..."
+                # Extract relevant section starting from logical beginning
+                content_preview = self._extract_relevant_section(cleaned_content, max_length=800)
                 
                 sources.append({
                     "content": content_preview,
