@@ -20,26 +20,24 @@ class VectorStoreManager:
         self.collection = None
         self.embeddings = None
         self.vectorstore = None
-        self.use_fallback = True  # Default to fallback due to persistent PyTorch issues
+        self.use_fallback = False  # Try embeddings first
         
-        # Due to persistent PyTorch meta tensor issues, force fallback mode
-        # but still use the real ChromaDB data for better results
-        logger.info("🔄 Forcing fallback mode due to PyTorch meta tensor issues...")
-        logger.info("📚 Will use ChromaDB data with text-based similarity search")
+        # Try to initialize with proper embeddings first
+        logger.info("� Attempting to initialize with AI embeddings...")
         
-        if self._init_fallback_with_chromadb():
-            logger.info("✅ ChromaDB fallback search system initialized successfully")
-        else:
-            logger.error("❌ Failed to initialize fallback system")
-            raise RuntimeError("Could not initialize any search system")
+        try:
+            self._init_with_embeddings()
+            logger.info("✅ AI embeddings system initialized successfully")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize with embeddings: {e}")
+            logger.info("🔄 Falling back to ChromaDB text-based search...")
+            self.use_fallback = True
             
-            # Uncomment the code below once we fix the PyTorch issues
-            # try:
-            #     self._init_with_embeddings()
-            # except Exception as e:
-            #     logger.warning(f"Failed to initialize with embeddings: {e}")
-            #     logger.info("Falling back to simple text-based search...")
-            #     self._init_fallback()
+            if self._init_fallback_with_chromadb():
+                logger.info("✅ ChromaDB fallback search system initialized successfully")
+            else:
+                logger.error("❌ Failed to initialize fallback system")
+                raise RuntimeError("Could not initialize any search system")
     
     def _init_with_embeddings(self):
         """Try to initialize with sentence transformers embeddings."""
