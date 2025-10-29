@@ -14,23 +14,24 @@ logger = logging.getLogger(__name__)
 class VectorStoreManager:
     """Manages the vector database for storing and retrieving clinical protocols."""
     
-    def __init__(self, persist_directory: str = "./data/chroma_db"):
-        self.persist_directory = Path(persist_directory)
-        self.persist_directory.mkdir(parents=True, exist_ok=True)
-        self.use_fallback = False
+    def __init__(self, persist_directory="./data/chroma_db"):
+        """Initialize the VectorStoreManager with enhanced error handling and fallback."""
+        self.persist_directory = persist_directory
+        self.collection = None
+        self.embeddings = None
+        self.vectorstore = None
         
-        # Check if we're running on Streamlit Cloud or if we should force fallback
-        import os
-        is_streamlit_cloud = os.path.exists("/mount/src") or "STREAMLIT" in os.environ
-        force_fallback = os.environ.get("FORCE_FALLBACK", "false").lower() == "true"
-        
-        if is_streamlit_cloud or force_fallback:
-            logger.info("Using text-based fallback mode (Cloud environment or forced)")
-            self._init_fallback()
+        # Try to initialize with embeddings first
+        logger.info("🔄 Attempting to initialize with embeddings...")
+        if self._init_with_embeddings():
+            logger.info("✅ Vector store initialized successfully with embeddings")
         else:
-            # For now, let's force fallback mode to avoid PyTorch issues
-            logger.info("Temporarily forcing fallback mode to avoid PyTorch issues")
-            self._init_fallback()
+            logger.warning("⚠️ Failed to initialize with embeddings, falling back to text search")
+            if self._init_fallback():
+                logger.info("✅ Fallback search system initialized successfully")
+            else:
+                logger.error("❌ Failed to initialize fallback system")
+                raise RuntimeError("Could not initialize any search system")
             
             # Uncomment the code below once we fix the PyTorch issues
             # try:
@@ -41,45 +42,63 @@ class VectorStoreManager:
             #     self._init_fallback()
     
     def _init_with_embeddings(self):
-        """Initialize with sentence transformers embeddings."""
-        # Initialize embeddings model with explicit device and dtype settings
+        """Try to initialize with sentence transformers embeddings."""
         try:
             import torch
-            # Force CPU and disable meta device usage
-            torch.set_default_device('cpu')
-            torch.set_default_dtype(torch.float32)
+            from sentence_transformers import SentenceTransformer
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+            from langchain_chroma import Chroma
             
-            # Load model with explicit parameters to avoid meta tensor issues
-            self.embedding_model = SentenceTransformer(
-                'all-MiniLM-L6-v2', 
-                device='cpu',
-                cache_folder=None,  # Disable caching to avoid corruption
-                use_auth_token=False
+            # Force CPU usage and handle PyTorch device issues
+            logger.info("Setting PyTorch to CPU mode to avoid device issues")
+            torch.set_default_device('cpu')
+            
+            # Use a smaller, more reliable model
+            model_name = "all-MiniLM-L6-v2"
+            logger.info(f"Loading embedding model: {model_name}")
+            
+            # Initialize embeddings with explicit device mapping
+            model_kwargs = {'device': 'cpu'}
+            encode_kwargs = {'normalize_embeddings': True}
+            
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name=model_name,
+                model_kwargs=model_kwargs,
+                encode_kwargs=encode_kwargs
             )
-            logger.info("✅ Embedding model loaded successfully on CPU")
+            
+            # Test the embeddings with a small example to catch PyTorch issues early
+            logger.info("Testing embeddings with sample text...")
+            test_result = self.embeddings.embed_query("test query")
+            logger.info(f"✅ Embeddings test successful, vector size: {len(test_result)}")
+            
+            # Initialize Chroma vector store
+            logger.info(f"Connecting to Chroma database at: {self.persist_directory}")
+            self.vectorstore = Chroma(
+                persist_directory=self.persist_directory,
+                embedding_function=self.embeddings
+            )
+            
+            # Test vector store connection
+            collections = self.vectorstore._client.list_collections()
+            if collections:
+                logger.info(f"✅ Found {len(collections)} collections in vector store")
+                return True
+            else:
+                logger.warning("⚠️ No collections found in vector store - may need re-ingestion")
+                return True  # Still valid, just empty
+                
         except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
-            raise e
-        
-        # Initialize ChromaDB client
-        self.client = chromadb.PersistentClient(
-            path=str(self.persist_directory)
-        )
-        
-        # Get or create collection
-        self.collection_name = "midi_protocols"
-        try:
-            self.collection = self.client.get_collection(self.collection_name)
-            logger.info(f"Loaded existing collection: {self.collection_name}")
-        except chromadb.errors.NotFoundError:
-            # Collection doesn't exist, create it
-            self.collection = self.client.create_collection(
-                name=self.collection_name,
-                metadata={"description": "Midi clinical protocols for RAG system"}
-            )
-            logger.info(f"Created new collection: {self.collection_name}")
-        
-        logger.info(f"Vector store initialized at {self.persist_directory}")
+            error_msg = str(e)
+            logger.error(f"❌ Failed to initialize embeddings: {error_msg}")
+            
+            # Check for specific PyTorch errors
+            if "meta tensor" in error_msg.lower() or "device" in error_msg.lower():
+                logger.error("🔍 Detected PyTorch device/tensor error - this is the known issue")
+            
+            self.embeddings = None
+            self.vectorstore = None
+            return False
     
     def _init_fallback(self):
         """Initialize with simple text-based fallback."""
