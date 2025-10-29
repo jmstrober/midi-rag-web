@@ -40,7 +40,7 @@ class RAGEngine:
     def __init__(self, 
                  vector_store_path: str = "./data/chroma_db",
                  model_provider: str = "anthropic",
-                 model_name: str = "claude-sonnet-4"):
+                 model_name: str = "claude-3-5-sonnet-20240620"):
         
         self.vector_store = VectorStoreManager(vector_store_path)
         self.model_provider = model_provider
