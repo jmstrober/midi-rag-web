@@ -5,7 +5,9 @@ langchain
 langchain-community
 langchain-anthropic
 langchain-core
-sentence-transformers
+torch>=2.0.0
+sentence-transformers>=2.2.0
 numpy
 pandas
 python-dotenv
+transformers>=4.21.0
