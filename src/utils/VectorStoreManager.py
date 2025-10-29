@@ -15,8 +15,14 @@ class VectorStoreManager:
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
         
-        # Initialize embeddings model directly
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Initialize embeddings model directly with safer loading
+        try:
+            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+            logger.info("✅ Embedding model loaded successfully on CPU")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model: {e}")
+            # Fallback to even simpler model
+            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu', model_kwargs={'torch_dtype': 'float32'})
         
         # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(
