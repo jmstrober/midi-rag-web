@@ -4,10 +4,14 @@ Medical RAG Streamlit App
 Uses the new medical embeddings system for clinical queries
 """
 
+import os
+# Set environment variables early to prevent multiprocessing issues
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+os.environ['OMP_NUM_THREADS'] = '1'
+
 import streamlit as st
 import sys
 from pathlib import Path
-import os
 from datetime import datetime
 
 # Add src to path
@@ -79,12 +83,17 @@ def initialize_engines():
         torch.set_default_device('cpu')
         torch.set_default_dtype(torch.float32)
         
+        # Additional safety settings
+        torch.set_num_threads(1)
+        
         clinical_engine = RAGEngine()
         patient_engine = PatientRAGEngine()
         
         # Check if using fallback mode
         if hasattr(clinical_engine.vector_store, 'use_fallback') and clinical_engine.vector_store.use_fallback:
             st.info("ℹ️ **Using text-based search mode** - The app is running with simplified search instead of AI embeddings for better stability.")
+        else:
+            st.success("✅ **Using AI embeddings** - Full vector search enabled with medical knowledge base.")
         
         return clinical_engine, patient_engine
     except Exception as e:

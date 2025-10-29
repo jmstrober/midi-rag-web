@@ -48,20 +48,40 @@ class VectorStoreManager:
         try:
             import torch
             from sentence_transformers import SentenceTransformer
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            from langchain_community.vectorstores import Chroma
+            
+            # Use the newer LangChain imports to avoid deprecation warnings
+            try:
+                from langchain_huggingface import HuggingFaceEmbeddings
+            except ImportError:
+                from langchain_community.embeddings import HuggingFaceEmbeddings
+            
+            try:
+                from langchain_chroma import Chroma
+            except ImportError:
+                from langchain_community.vectorstores import Chroma
             
             # Force CPU usage and handle PyTorch device issues
             logger.info("Setting PyTorch to CPU mode to avoid device issues")
             torch.set_default_device('cpu')
             
+            # Set environment variables to prevent multiprocessing issues
+            import os
+            os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+            os.environ['OMP_NUM_THREADS'] = '1'
+            
             # Use a smaller, more reliable model
             model_name = "all-MiniLM-L6-v2"
             logger.info(f"Loading embedding model: {model_name}")
             
-            # Initialize embeddings with explicit device mapping
-            model_kwargs = {'device': 'cpu'}
-            encode_kwargs = {'normalize_embeddings': True}
+            # Initialize embeddings with explicit device mapping and safer settings
+            model_kwargs = {
+                'device': 'cpu',
+                'trust_remote_code': False
+            }
+            encode_kwargs = {
+                'normalize_embeddings': True,
+                'batch_size': 1  # Smaller batch size to prevent memory issues
+            }
             
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=model_name,
@@ -104,6 +124,8 @@ class VectorStoreManager:
             # Check for specific PyTorch errors
             if "meta tensor" in error_msg.lower() or "device" in error_msg.lower():
                 logger.error("🔍 Detected PyTorch device/tensor error - this is the known issue")
+            elif "segmentation fault" in error_msg.lower() or "sigsegv" in error_msg.lower():
+                logger.error("🔍 Detected segmentation fault - memory/process issue")
             
             self.embeddings = None
             self.vectorstore = None
