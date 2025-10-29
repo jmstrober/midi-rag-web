@@ -2,7 +2,7 @@ import logging
 import chromadb
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from sentence_transformers import SentenceTransformer
+# Import sentence_transformers only when needed to avoid loading issues
 try:
     from langchain_core.documents import Document
 except ImportError:
@@ -20,20 +20,18 @@ class VectorStoreManager:
         self.collection = None
         self.embeddings = None
         self.vectorstore = None
-        self.use_fallback = True  # Default to fallback
+        self.use_fallback = True  # Default to fallback due to persistent PyTorch issues
         
-        # Try to initialize with embeddings first
-        logger.info("🔄 Attempting to initialize with embeddings...")
-        if self._init_with_embeddings():
-            logger.info("✅ Vector store initialized successfully with embeddings")
-            self.use_fallback = False  # Embeddings successful, don't use fallback
+        # Due to persistent PyTorch meta tensor issues, force fallback mode
+        # but still use the real ChromaDB data for better results
+        logger.info("🔄 Forcing fallback mode due to PyTorch meta tensor issues...")
+        logger.info("📚 Will use ChromaDB data with text-based similarity search")
+        
+        if self._init_fallback_with_chromadb():
+            logger.info("✅ ChromaDB fallback search system initialized successfully")
         else:
-            logger.warning("⚠️ Failed to initialize with embeddings, falling back to text search")
-            if self._init_fallback():
-                logger.info("✅ Fallback search system initialized successfully")
-            else:
-                logger.error("❌ Failed to initialize fallback system")
-                raise RuntimeError("Could not initialize any search system")
+            logger.error("❌ Failed to initialize fallback system")
+            raise RuntimeError("Could not initialize any search system")
             
             # Uncomment the code below once we fix the PyTorch issues
             # try:
@@ -108,12 +106,15 @@ class VectorStoreManager:
                 logger.info(f"✅ Found {len(collections)} collections in vector store")
                 # Set up the collection and embedding model for search methods
                 self.collection = self.vectorstore._collection
+                # Import SentenceTransformer only when embeddings work
+                from sentence_transformers import SentenceTransformer
                 self.embedding_model = SentenceTransformer(model_name, device='cpu')
                 return True
             else:
                 logger.warning("⚠️ No collections found in vector store - may need re-ingestion")
                 # Even if empty, set up the objects for potential future use
                 self.collection = self.vectorstore._collection
+                from sentence_transformers import SentenceTransformer
                 self.embedding_model = SentenceTransformer(model_name, device='cpu')
                 return True  # Still valid, just empty
                 
@@ -131,6 +132,102 @@ class VectorStoreManager:
             self.vectorstore = None
             return False
     
+    def _init_fallback_with_chromadb(self):
+        """Initialize fallback mode but using real ChromaDB data for better results."""
+        try:
+            import chromadb
+            from chromadb.config import Settings
+            
+            # Connect directly to ChromaDB without embeddings
+            logger.info(f"Connecting directly to ChromaDB at: {self.persist_directory}")
+            client = chromadb.PersistentClient(path=self.persist_directory)
+            
+            # Try to get the midi_protocols collection which has all our data
+            collections = client.list_collections()
+            logger.info(f"Found {len(collections)} collections in ChromaDB")
+            
+            midi_collection = None
+            for collection in collections:
+                if collection.name == "midi_protocols":
+                    midi_collection = collection
+                    break
+            
+            if midi_collection:
+                logger.info(f"✅ Found midi_protocols collection with {midi_collection.count()} documents")
+                
+                # Get all documents from the collection for text-based search
+                logger.info("Loading all documents for text-based search...")
+                all_results = midi_collection.get(
+                    include=['documents', 'metadatas']
+                )
+                
+                # Create a simple text-based search using the real ChromaDB documents
+                class ChromaDBFallbackStore:
+                    def __init__(self, documents, metadatas):
+                        self.documents = []
+                        for i, (doc, metadata) in enumerate(zip(documents, metadatas)):
+                            self.documents.append({
+                                'content': doc,
+                                'metadata': metadata or {}
+                            })
+                        logger.info(f"Loaded {len(self.documents)} documents for text search")
+                    
+                    def search_with_scores(self, query, k=5, filter_dict=None):
+                        import re
+                        query_words = re.findall(r'\b\w+\b', query.lower())
+                        results = []
+                        
+                        for doc_data in self.documents:
+                            content = doc_data['content'].lower()
+                            metadata = doc_data['metadata']
+                            
+                            # Apply filters if provided
+                            if filter_dict:
+                                skip = False
+                                for key, value in filter_dict.items():
+                                    if metadata.get(key) != value:
+                                        skip = True
+                                        break
+                                if skip:
+                                    continue
+                            
+                            # Calculate relevance score based on keyword matches
+                            score = 0
+                            for word in query_words:
+                                if word in content:
+                                    score += content.count(word) * 0.1
+                            
+                            # Boost for important medical terms
+                            medical_terms = ['breast cancer', 'hrt', 'hormone', 'menopause', 'protocol']
+                            for term in medical_terms:
+                                if term in query.lower() and term in content:
+                                    score += 1.0
+                            
+                            if score > 0:
+                                # Create a mock document
+                                class MockDoc:
+                                    def __init__(self, content, metadata):
+                                        self.page_content = doc_data['content']  # Use original content, not lowercased
+                                        self.metadata = metadata
+                                results.append((MockDoc(doc_data['content'], metadata), score))
+                        
+                        return sorted(results, key=lambda x: x[1], reverse=True)[:k]
+                    
+                    def get_collection_stats(self):
+                        return {'document_count': len(self.documents), 'type': 'chromadb_fallback'}
+                
+                self.fallback_store = ChromaDBFallbackStore(all_results['documents'], all_results['metadatas'])
+                logger.info("✅ ChromaDB fallback text search initialized")
+                return True
+            else:
+                logger.warning("⚠️ midi_protocols collection not found, using minimal fallback")
+                return self._init_fallback()
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize ChromaDB fallback: {e}")
+            logger.info("Falling back to minimal text search...")
+            return self._init_fallback()
+
     def _init_fallback(self):
         """Initialize with simple text-based fallback."""
         import sys
