@@ -20,11 +20,13 @@ class VectorStoreManager:
         self.collection = None
         self.embeddings = None
         self.vectorstore = None
+        self.use_fallback = True  # Default to fallback
         
         # Try to initialize with embeddings first
         logger.info("🔄 Attempting to initialize with embeddings...")
         if self._init_with_embeddings():
             logger.info("✅ Vector store initialized successfully with embeddings")
+            self.use_fallback = False  # Embeddings successful, don't use fallback
         else:
             logger.warning("⚠️ Failed to initialize with embeddings, falling back to text search")
             if self._init_fallback():
@@ -47,7 +49,7 @@ class VectorStoreManager:
             import torch
             from sentence_transformers import SentenceTransformer
             from langchain_community.embeddings import HuggingFaceEmbeddings
-            from langchain_chroma import Chroma
+            from langchain_community.vectorstores import Chroma
             
             # Force CPU usage and handle PyTorch device issues
             logger.info("Setting PyTorch to CPU mode to avoid device issues")
@@ -76,16 +78,23 @@ class VectorStoreManager:
             logger.info(f"Connecting to Chroma database at: {self.persist_directory}")
             self.vectorstore = Chroma(
                 persist_directory=self.persist_directory,
-                embedding_function=self.embeddings
+                embedding_function=self.embeddings,
+                collection_name="midi_protocols"  # Connect to the existing collection with data
             )
             
             # Test vector store connection
             collections = self.vectorstore._client.list_collections()
             if collections:
                 logger.info(f"✅ Found {len(collections)} collections in vector store")
+                # Set up the collection and embedding model for search methods
+                self.collection = self.vectorstore._collection
+                self.embedding_model = SentenceTransformer(model_name, device='cpu')
                 return True
             else:
                 logger.warning("⚠️ No collections found in vector store - may need re-ingestion")
+                # Even if empty, set up the objects for potential future use
+                self.collection = self.vectorstore._collection
+                self.embedding_model = SentenceTransformer(model_name, device='cpu')
                 return True  # Still valid, just empty
                 
         except Exception as e:
@@ -193,8 +202,7 @@ class VectorStoreManager:
                 
                 def get_collection_stats(self):
                     return {'document_count': len(self.documents), 'type': 'minimal_fallback'}
-        
-        self.use_fallback = True
+
         self.fallback_store = SimpleVectorStore()
         self.embedding_model = None
         logger.info("✅ Fallback text-based store initialized")
