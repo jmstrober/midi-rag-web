@@ -72,13 +72,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def initialize_engines():
-    """Initialize both RAG engines."""
+    """Initialize both RAG engines with enhanced error handling."""
     try:
+        # Set PyTorch defaults before importing RAG engines
+        import torch
+        torch.set_default_device('cpu')
+        torch.set_default_dtype(torch.float32)
+        
         clinical_engine = RAGEngine()
         patient_engine = PatientRAGEngine()
         return clinical_engine, patient_engine
     except Exception as e:
-        st.error(f"Failed to initialize RAG engines: {e}")
+        error_msg = f"Failed to initialize RAG engines: {str(e)}"
+        st.error(error_msg)
+        st.error("**Troubleshooting suggestions:**")
+        st.error("1. The app may be loading - please wait and refresh")
+        st.error("2. Try clearing browser cache and refreshing")
+        st.error("3. Check Streamlit Community Cloud logs for detailed errors")
+        
+        # Log the full error for debugging
+        import traceback
+        st.code(traceback.format_exc())
+        
         return None, None
 
 def display_sources_with_scores(sources, interface_type="patient"):

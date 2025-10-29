@@ -17,15 +17,36 @@ class VectorStoreManager:
     def __init__(self, persist_directory: str = "./data/chroma_db"):
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
+        self.use_fallback = False
         
-        # Initialize embeddings model directly with safer loading
+        # Try to initialize with embeddings first
         try:
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+            self._init_with_embeddings()
+        except Exception as e:
+            logger.warning(f"Failed to initialize with embeddings: {e}")
+            logger.info("Falling back to simple text-based search...")
+            self._init_fallback()
+    
+    def _init_with_embeddings(self):
+        """Initialize with sentence transformers embeddings."""
+        # Initialize embeddings model with explicit device and dtype settings
+        try:
+            import torch
+            # Force CPU and disable meta device usage
+            torch.set_default_device('cpu')
+            torch.set_default_dtype(torch.float32)
+            
+            # Load model with explicit parameters to avoid meta tensor issues
+            self.embedding_model = SentenceTransformer(
+                'all-MiniLM-L6-v2', 
+                device='cpu',
+                cache_folder=None,  # Disable caching to avoid corruption
+                use_auth_token=False
+            )
             logger.info("✅ Embedding model loaded successfully on CPU")
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
-            # Fallback to even simpler model
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu', model_kwargs={'torch_dtype': 'float32'})
+            raise e
         
         # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(
@@ -46,6 +67,14 @@ class VectorStoreManager:
             logger.info(f"Created new collection: {self.collection_name}")
         
         logger.info(f"Vector store initialized at {self.persist_directory}")
+    
+    def _init_fallback(self):
+        """Initialize with simple text-based fallback."""
+        from .SimpleVectorStore import SimpleVectorStore
+        self.use_fallback = True
+        self.fallback_store = SimpleVectorStore()
+        self.embedding_model = None
+        logger.info("✅ Fallback text-based store initialized")
     
     def add_documents(self, documents: List[Document]) -> List[str]:
         """Add documents to the vector store."""
@@ -132,6 +161,10 @@ class VectorStoreManager:
     
     def search_with_scores(self, query: str, k: int = 5, filter_dict: Optional[Dict] = None) -> List[tuple]:
         """Search for similar documents with similarity scores."""
+        # Use fallback if embeddings failed
+        if self.use_fallback:
+            return self.fallback_store.search_with_scores(query, k, filter_dict)
+        
         try:
             # Check if collection is empty
             if self.collection.count() == 0:
@@ -166,6 +199,14 @@ class VectorStoreManager:
             
         except Exception as e:
             logger.error(f"Error searching vector store with scores: {str(e)}")
+            # Try fallback on error
+            if not self.use_fallback:
+                logger.info("Attempting fallback search...")
+                try:
+                    self._init_fallback()
+                    return self.fallback_store.search_with_scores(query, k, filter_dict)
+                except Exception as e2:
+                    logger.error(f"Fallback search also failed: {e2}")
             return []
     
     def get_collection_stats(self) -> Dict[str, Any]:
