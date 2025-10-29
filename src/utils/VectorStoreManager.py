@@ -19,21 +19,26 @@ class VectorStoreManager:
         self.persist_directory.mkdir(parents=True, exist_ok=True)
         self.use_fallback = False
         
-        # Check if we're running on Streamlit Cloud (which has PyTorch issues)
+        # Check if we're running on Streamlit Cloud or if we should force fallback
         import os
         is_streamlit_cloud = os.path.exists("/mount/src") or "STREAMLIT" in os.environ
+        force_fallback = os.environ.get("FORCE_FALLBACK", "false").lower() == "true"
         
-        if is_streamlit_cloud:
-            logger.info("Detected Streamlit Cloud environment - using text-based fallback")
+        if is_streamlit_cloud or force_fallback:
+            logger.info("Using text-based fallback mode (Cloud environment or forced)")
             self._init_fallback()
         else:
-            # Try to initialize with embeddings first for local environments
-            try:
-                self._init_with_embeddings()
-            except Exception as e:
-                logger.warning(f"Failed to initialize with embeddings: {e}")
-                logger.info("Falling back to simple text-based search...")
-                self._init_fallback()
+            # For now, let's force fallback mode to avoid PyTorch issues
+            logger.info("Temporarily forcing fallback mode to avoid PyTorch issues")
+            self._init_fallback()
+            
+            # Uncomment the code below once we fix the PyTorch issues
+            # try:
+            #     self._init_with_embeddings()
+            # except Exception as e:
+            #     logger.warning(f"Failed to initialize with embeddings: {e}")
+            #     logger.info("Falling back to simple text-based search...")
+            #     self._init_fallback()
     
     def _init_with_embeddings(self):
         """Initialize with sentence transformers embeddings."""
@@ -92,30 +97,42 @@ class VectorStoreManager:
             # If that fails, define a minimal fallback inline
             class SimpleVectorStore:
                 def __init__(self):
-                    # Include some basic clinical knowledge for fallback
+                    # Include comprehensive clinical knowledge for fallback
                     self.documents = [
                         {
-                            'content': 'Hormone replacement therapy (HRT) is used to treat menopausal symptoms including hot flashes, night sweats, and vaginal dryness. Benefits include symptom relief and bone protection. Risks include increased risk of blood clots and breast cancer in some women.',
+                            'content': 'Hormone replacement therapy (HRT) is used to treat menopausal symptoms including hot flashes, night sweats, and vaginal dryness. Benefits include symptom relief and bone protection. Risks include increased risk of blood clots and breast cancer in some women. Contraindications include active breast cancer, undiagnosed vaginal bleeding, and active blood clots.',
                             'metadata': {'source': 'HRT Protocol', 'data_source': 'protocols', 'protocol_type': 'menopause'}
                         },
                         {
-                            'content': 'Hot flashes are sudden feelings of warmth, often accompanied by sweating and rapid heartbeat. Treatment options include hormone therapy, selective serotonin reuptake inhibitors (SSRIs), gabapentin, and lifestyle modifications.',
+                            'content': 'Hot flashes are sudden feelings of warmth, often accompanied by sweating and rapid heartbeat. Treatment options include hormone therapy (estrogen with or without progesterone), selective serotonin reuptake inhibitors (SSRIs) like paroxetine, gabapentin, clonidine, and lifestyle modifications including avoiding triggers, staying cool, and stress management.',
                             'metadata': {'source': 'Hot Flash Management', 'data_source': 'protocols', 'protocol_type': 'menopause'}
                         },
                         {
-                            'content': 'Weight management during menopause can be challenging due to hormonal changes. Strategies include regular exercise, balanced nutrition, adequate sleep, and stress management. Some patients may benefit from weight loss medications.',
+                            'content': 'Weight management during menopause can be challenging due to hormonal changes that slow metabolism and increase abdominal fat. Strategies include regular exercise (both cardio and strength training), balanced nutrition with adequate protein, adequate sleep, stress management, and intermittent fasting. Some patients may benefit from weight loss medications like semaglutide or liraglutide.',
                             'metadata': {'source': 'Weight Management Protocol', 'data_source': 'protocols', 'protocol_type': 'weight_management'}
                         },
                         {
-                            'content': 'Sleep disturbances are common during menopause. Treatment approaches include sleep hygiene, melatonin, cognitive behavioral therapy for insomnia, and addressing underlying hot flashes.',
+                            'content': 'Sleep disturbances are common during menopause due to hot flashes, night sweats, and hormonal changes. Treatment approaches include sleep hygiene education, melatonin 1-3mg before bedtime, cognitive behavioral therapy for insomnia (CBT-I), addressing underlying hot flashes with hormone therapy, and considering sleep aids like trazodone or zolpidem for short-term use.',
                             'metadata': {'source': 'Sleep Protocol', 'data_source': 'protocols', 'protocol_type': 'sleep'}
                         },
                         {
-                            'content': 'Vaginal dryness and painful intercourse are common symptoms of menopause caused by decreased estrogen. Treatment options include vaginal moisturizers, lubricants, and low-dose vaginal estrogen therapy.',
+                            'content': 'Vaginal dryness and painful intercourse (dyspareunia) are common symptoms of menopause caused by decreased estrogen leading to vaginal atrophy. Treatment options include vaginal moisturizers (used regularly), personal lubricants (used during intercourse), and low-dose vaginal estrogen therapy (creams, tablets, or rings). Vaginal estrogen is generally safe even for breast cancer survivors.',
                             'metadata': {'source': 'Sexual Health Protocol', 'data_source': 'protocols', 'protocol_type': 'sexual_health'}
+                        },
+                        {
+                            'content': 'Perimenopause is the transitional period before menopause, typically lasting 4-8 years. Symptoms include irregular periods, hot flashes, mood changes, sleep disturbances, and cognitive changes. Hormone levels fluctuate unpredictably. Treatment may include low-dose birth control pills for younger women or hormone therapy for severe symptoms.',
+                            'metadata': {'source': 'Perimenopause Protocol', 'data_source': 'protocols', 'protocol_type': 'menopause'}
+                        },
+                        {
+                            'content': 'Mood disorders during menopause include depression, anxiety, and irritability due to hormonal fluctuations. Risk factors include history of depression, severe menopausal symptoms, and psychosocial stressors. Treatment options include hormone therapy, antidepressants (SSRIs/SNRIs), counseling, stress management, and lifestyle modifications.',
+                            'metadata': {'source': 'Mood Disorders Protocol', 'data_source': 'protocols', 'protocol_type': 'mood'}
+                        },
+                        {
+                            'content': 'Bone health becomes critical during menopause due to decreased estrogen leading to accelerated bone loss. Prevention strategies include adequate calcium (1200mg daily) and vitamin D (800-1000 IU daily), weight-bearing exercise, smoking cessation, and limiting alcohol. Hormone therapy provides bone protection. DEXA scans should be performed at menopause and every 1-2 years thereafter.',
+                            'metadata': {'source': 'Bone Health Protocol', 'data_source': 'protocols', 'protocol_type': 'bone_health'}
                         }
                     ]
-                    logger.info(f"Using minimal inline fallback store with {len(self.documents)} sample documents")
+                    logger.info(f"Using comprehensive inline fallback store with {len(self.documents)} clinical documents")
                 
                 def search_with_scores(self, query, k=5, filter_dict=None):
                     # Improved keyword matching
