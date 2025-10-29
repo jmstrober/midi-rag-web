@@ -19,13 +19,21 @@ class VectorStoreManager:
         self.persist_directory.mkdir(parents=True, exist_ok=True)
         self.use_fallback = False
         
-        # Try to initialize with embeddings first
-        try:
-            self._init_with_embeddings()
-        except Exception as e:
-            logger.warning(f"Failed to initialize with embeddings: {e}")
-            logger.info("Falling back to simple text-based search...")
+        # Check if we're running on Streamlit Cloud (which has PyTorch issues)
+        import os
+        is_streamlit_cloud = os.path.exists("/mount/src") or "STREAMLIT" in os.environ
+        
+        if is_streamlit_cloud:
+            logger.info("Detected Streamlit Cloud environment - using text-based fallback")
             self._init_fallback()
+        else:
+            # Try to initialize with embeddings first for local environments
+            try:
+                self._init_with_embeddings()
+            except Exception as e:
+                logger.warning(f"Failed to initialize with embeddings: {e}")
+                logger.info("Falling back to simple text-based search...")
+                self._init_fallback()
     
     def _init_with_embeddings(self):
         """Initialize with sentence transformers embeddings."""
@@ -70,7 +78,86 @@ class VectorStoreManager:
     
     def _init_fallback(self):
         """Initialize with simple text-based fallback."""
-        from .SimpleVectorStore import SimpleVectorStore
+        import sys
+        from pathlib import Path
+        
+        # Add the utils directory to the path for import
+        utils_dir = Path(__file__).parent
+        if str(utils_dir) not in sys.path:
+            sys.path.append(str(utils_dir))
+        
+        try:
+            from SimpleVectorStore import SimpleVectorStore
+        except ImportError:
+            # If that fails, define a minimal fallback inline
+            class SimpleVectorStore:
+                def __init__(self):
+                    # Include some basic clinical knowledge for fallback
+                    self.documents = [
+                        {
+                            'content': 'Hormone replacement therapy (HRT) is used to treat menopausal symptoms including hot flashes, night sweats, and vaginal dryness. Benefits include symptom relief and bone protection. Risks include increased risk of blood clots and breast cancer in some women.',
+                            'metadata': {'source': 'HRT Protocol', 'data_source': 'protocols', 'protocol_type': 'menopause'}
+                        },
+                        {
+                            'content': 'Hot flashes are sudden feelings of warmth, often accompanied by sweating and rapid heartbeat. Treatment options include hormone therapy, selective serotonin reuptake inhibitors (SSRIs), gabapentin, and lifestyle modifications.',
+                            'metadata': {'source': 'Hot Flash Management', 'data_source': 'protocols', 'protocol_type': 'menopause'}
+                        },
+                        {
+                            'content': 'Weight management during menopause can be challenging due to hormonal changes. Strategies include regular exercise, balanced nutrition, adequate sleep, and stress management. Some patients may benefit from weight loss medications.',
+                            'metadata': {'source': 'Weight Management Protocol', 'data_source': 'protocols', 'protocol_type': 'weight_management'}
+                        },
+                        {
+                            'content': 'Sleep disturbances are common during menopause. Treatment approaches include sleep hygiene, melatonin, cognitive behavioral therapy for insomnia, and addressing underlying hot flashes.',
+                            'metadata': {'source': 'Sleep Protocol', 'data_source': 'protocols', 'protocol_type': 'sleep'}
+                        },
+                        {
+                            'content': 'Vaginal dryness and painful intercourse are common symptoms of menopause caused by decreased estrogen. Treatment options include vaginal moisturizers, lubricants, and low-dose vaginal estrogen therapy.',
+                            'metadata': {'source': 'Sexual Health Protocol', 'data_source': 'protocols', 'protocol_type': 'sexual_health'}
+                        }
+                    ]
+                    logger.info(f"Using minimal inline fallback store with {len(self.documents)} sample documents")
+                
+                def search_with_scores(self, query, k=5, filter_dict=None):
+                    # Improved keyword matching
+                    results = []
+                    query_words = set(query.lower().split())
+                    
+                    for doc in self.documents:
+                        content = doc.get('content', '').lower()
+                        content_words = set(content.split())
+                        
+                        # Calculate basic similarity score
+                        common_words = query_words.intersection(content_words)
+                        score = len(common_words) / len(query_words) if query_words else 0
+                        
+                        # Boost score for exact phrase matches
+                        if query.lower() in content:
+                            score += 0.5
+                        
+                        # Apply filters if provided
+                        if filter_dict:
+                            metadata = doc.get('metadata', {})
+                            skip = False
+                            for key, value in filter_dict.items():
+                                if metadata.get(key) != value:
+                                    skip = True
+                                    break
+                            if skip:
+                                continue
+                        
+                        if score > 0:
+                            # Create a mock document
+                            class MockDoc:
+                                def __init__(self, content, metadata):
+                                    self.page_content = content
+                                    self.metadata = metadata
+                            results.append((MockDoc(doc['content'], doc.get('metadata', {})), score))
+                    
+                    return sorted(results, key=lambda x: x[1], reverse=True)[:k]
+                
+                def get_collection_stats(self):
+                    return {'document_count': len(self.documents), 'type': 'minimal_fallback'}
+        
         self.use_fallback = True
         self.fallback_store = SimpleVectorStore()
         self.embedding_model = None

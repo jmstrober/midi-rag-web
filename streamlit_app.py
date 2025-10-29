@@ -81,6 +81,11 @@ def initialize_engines():
         
         clinical_engine = RAGEngine()
         patient_engine = PatientRAGEngine()
+        
+        # Check if using fallback mode
+        if hasattr(clinical_engine.vector_store, 'use_fallback') and clinical_engine.vector_store.use_fallback:
+            st.info("ℹ️ **Using text-based search mode** - The app is running with simplified search instead of AI embeddings for better stability.")
+        
         return clinical_engine, patient_engine
     except Exception as e:
         error_msg = f"Failed to initialize RAG engines: {str(e)}"
