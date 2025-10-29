@@ -62,6 +62,9 @@ def migrate_to_medical_embeddings():
                 # Process documents with medical chunking
                 print("\n4. Re-processing documents with medical embeddings...")
                 
+            try:
+                from langchain_core.documents import Document
+            except ImportError:
                 from langchain.schema import Document
                 
                 processed_count = 0

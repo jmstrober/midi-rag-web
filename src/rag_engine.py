@@ -16,7 +16,10 @@ except ImportError:
 sys.path.append(str(Path(__file__).parent / 'utils'))
 
 from VectorStoreManager import VectorStoreManager
-from langchain.schema import Document
+try:
+    from langchain_core.documents import Document
+except ImportError:
+    from langchain.schema import Document
 
 # For LLM integration
 try:

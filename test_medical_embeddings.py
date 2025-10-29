@@ -11,7 +11,10 @@ import logging
 sys.path.append(str(Path(__file__).parent / "src"))
 
 from utils.VectorStoreManager import VectorStoreManager
-from langchain.schema import Document
+try:
+    from langchain_core.documents import Document
+except ImportError:
+    from langchain.schema import Document
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
