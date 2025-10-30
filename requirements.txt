@@ -3,8 +3,10 @@ anthropic
 chromadb
 langchain
 langchain-community
+langchain-huggingface
 langchain-anthropic
 langchain-core
+langchain-chroma
 torch>=2.0.0
 sentence-transformers>=2.2.0
 numpy

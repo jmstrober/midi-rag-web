@@ -57,11 +57,20 @@ class VectorStoreManager:
             
             from sentence_transformers import SentenceTransformer
             
-            # ONLY use the new LangChain packages - no fallbacks to avoid deprecation warnings
-            from langchain_huggingface import HuggingFaceEmbeddings
-            from langchain_chroma import Chroma
+            # Use the installed LangChain packages that work
+            # Try newer langchain_huggingface first, fall back to langchain_community
+            try:
+                from langchain_huggingface import HuggingFaceEmbeddings
+                logger.info("✅ Using langchain_huggingface package")
+            except ImportError:
+                try:
+                    from langchain_community.embeddings import HuggingFaceEmbeddings
+                    logger.info("✅ Using langchain_community.embeddings package")
+                except ImportError:
+                    logger.error("❌ Neither langchain_huggingface nor langchain_community.embeddings available")
+                    raise ImportError("No compatible HuggingFace embeddings package found")
             
-            logger.info("✅ Using new langchain_huggingface and langchain_chroma packages")
+            from langchain_chroma import Chroma
             
             # DO NOT configure PyTorch threading - this causes "parallel work has started" errors!
             logger.info("⚠️ Skipping PyTorch threading configuration to avoid conflicts")
