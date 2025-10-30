@@ -49,11 +49,25 @@ class VectorStoreManager:
             os.environ['TOKENIZERS_PARALLELISM'] = 'false'
             os.environ['OMP_NUM_THREADS'] = '1'
             
-            # Force offline mode to prevent any Hugging Face Hub communication
-            os.environ['TRANSFORMERS_OFFLINE'] = '1'
-            os.environ['HF_HUB_OFFLINE'] = '1'
-            os.environ['HF_DATASETS_OFFLINE'] = '1'
-            logger.info("🔒 Forced offline mode for Hugging Face models")
+            # Detect if we're running in Streamlit Cloud or locally
+            is_streamlit_cloud = (
+                'STREAMLIT_SHARING_MODE' in os.environ or 
+                'STREAMLIT_SERVER_HEADLESS' in os.environ or
+                'HOSTNAME' in os.environ and 'streamlit' in os.environ.get('HOSTNAME', '').lower()
+            )
+            
+            if is_streamlit_cloud:
+                # Allow online mode for Streamlit Cloud to download models
+                logger.info("🌐 Running in Streamlit Cloud - online mode enabled for model downloads")
+                # Set longer timeout for cloud model downloads
+                os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'  # Disable progress bars in cloud
+                
+            else:
+                # Force offline mode to prevent any Hugging Face Hub communication (local only)
+                os.environ['TRANSFORMERS_OFFLINE'] = '1'
+                os.environ['HF_HUB_OFFLINE'] = '1'
+                os.environ['HF_DATASETS_OFFLINE'] = '1'
+                logger.info("🔒 Running locally - forced offline mode for Hugging Face models")
             
             from sentence_transformers import SentenceTransformer
             
@@ -75,19 +89,43 @@ class VectorStoreManager:
             # DO NOT configure PyTorch threading - this causes "parallel work has started" errors!
             logger.info("⚠️ Skipping PyTorch threading configuration to avoid conflicts")
             
-            # Use a smaller, more reliable model
-            model_name = "all-MiniLM-L6-v2"
-            logger.info(f"Loading embedding model: {model_name} (offline mode)")
+            # Use a smaller, more reliable model with multiple fallback strategies
+            model_candidates = [
+                "all-MiniLM-L6-v2",           # Primary choice (384 dim)
+                "paraphrase-MiniLM-L6-v2",    # Alternative (384 dim) 
+                "all-distilroberta-v1",       # Backup (768 dim)
+                "paraphrase-distilroberta-base-v1"  # Last resort (768 dim)
+            ]
             
-            # Initialize embeddings with minimal settings to avoid conflicts
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name=model_name
-            )
+            embeddings_initialized = False
+            chosen_model = None
             
-            # Test the embeddings with a small example
-            logger.info("Testing embeddings with sample text...")
-            test_result = self.embeddings.embed_query("test query")
-            logger.info(f"✅ Embeddings test successful, vector size: {len(test_result)}")
+            for model_name in model_candidates:
+                try:
+                    logger.info(f"Trying embedding model: {model_name}")
+                    
+                    # Initialize embeddings with minimal settings to avoid conflicts
+                    self.embeddings = HuggingFaceEmbeddings(
+                        model_name=model_name
+                    )
+                    
+                    # Test the embeddings with a small example
+                    logger.info("Testing embeddings with sample text...")
+                    test_result = self.embeddings.embed_query("test query")
+                    logger.info(f"✅ Embeddings test successful with {model_name}, vector size: {len(test_result)}")
+                    
+                    chosen_model = model_name
+                    embeddings_initialized = True
+                    break
+                    
+                except Exception as model_error:
+                    logger.warning(f"⚠️ Failed to initialize {model_name}: {model_error}")
+                    continue
+            
+            if not embeddings_initialized:
+                raise RuntimeError("Failed to initialize any embedding model")
+            
+            logger.info(f"✅ Successfully initialized embeddings with: {chosen_model}")
             
             # Initialize Chroma vector store
             logger.info(f"Connecting to Chroma database at: {self.persist_directory}")
@@ -105,16 +143,20 @@ class VectorStoreManager:
                 self.collection = self.vectorstore._collection
                 # Import SentenceTransformer only when embeddings work
                 from sentence_transformers import SentenceTransformer
-                logger.info(f"Initializing SentenceTransformer {model_name} in offline mode")
-                self.embedding_model = SentenceTransformer(model_name, cache_folder=None)  # Use default cache
+                logger.info(f"Initializing SentenceTransformer {chosen_model}")
+                # Use None cache folder to use default system cache location
+                cache_folder = None if is_streamlit_cloud else None
+                self.embedding_model = SentenceTransformer(chosen_model, cache_folder=cache_folder)
                 return True
             else:
                 logger.warning("⚠️ No collections found in vector store - may need re-ingestion")
                 # Even if empty, set up the objects for potential future use
                 self.collection = self.vectorstore._collection
                 from sentence_transformers import SentenceTransformer
-                logger.info(f"Initializing SentenceTransformer {model_name} in offline mode (empty store)")
-                self.embedding_model = SentenceTransformer(model_name, cache_folder=None)  # Use default cache
+                logger.info(f"Initializing SentenceTransformer {chosen_model} (empty store)")
+                # Use None cache folder to use default system cache location  
+                cache_folder = None if is_streamlit_cloud else None
+                self.embedding_model = SentenceTransformer(chosen_model, cache_folder=cache_folder)
                 return True  # Still valid, just empty
                 
         except Exception as e:
