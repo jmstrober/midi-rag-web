@@ -19,7 +19,10 @@ from VectorStoreManager import VectorStoreManager
 try:
     from langchain_core.documents import Document
 except ImportError:
-    from langchain.schema import Document
+    try:
+        from langchain.schema import Document
+    except ImportError:
+        from langchain_community.schema import Document
 
 # For LLM integration
 try:

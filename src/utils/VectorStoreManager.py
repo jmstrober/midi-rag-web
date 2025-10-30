@@ -43,49 +43,39 @@ class VectorStoreManager:
         """Try to initialize with sentence transformers embeddings."""
         try:
             import torch
-            from sentence_transformers import SentenceTransformer
             
-            # Use the newer LangChain imports to avoid deprecation warnings
-            try:
-                from langchain_huggingface import HuggingFaceEmbeddings
-            except ImportError:
-                from langchain_community.embeddings import HuggingFaceEmbeddings
-            
-            try:
-                from langchain_chroma import Chroma
-            except ImportError:
-                from langchain_community.vectorstores import Chroma
-            
-            # Force CPU usage and handle PyTorch device issues
-            logger.info("Setting PyTorch to CPU mode to avoid device issues")
-            torch.set_default_device('cpu')
-            
-            # Set environment variables to prevent multiprocessing issues
+            # Set environment variables to prevent multiprocessing issues AND force offline mode
             import os
             os.environ['TOKENIZERS_PARALLELISM'] = 'false'
             os.environ['OMP_NUM_THREADS'] = '1'
             
+            # Force offline mode to prevent any Hugging Face Hub communication
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            os.environ['HF_HUB_OFFLINE'] = '1'
+            os.environ['HF_DATASETS_OFFLINE'] = '1'
+            logger.info("🔒 Forced offline mode for Hugging Face models")
+            
+            from sentence_transformers import SentenceTransformer
+            
+            # ONLY use the new LangChain packages - no fallbacks to avoid deprecation warnings
+            from langchain_huggingface import HuggingFaceEmbeddings
+            from langchain_chroma import Chroma
+            
+            logger.info("✅ Using new langchain_huggingface and langchain_chroma packages")
+            
+            # DO NOT configure PyTorch threading - this causes "parallel work has started" errors!
+            logger.info("⚠️ Skipping PyTorch threading configuration to avoid conflicts")
+            
             # Use a smaller, more reliable model
             model_name = "all-MiniLM-L6-v2"
-            logger.info(f"Loading embedding model: {model_name}")
+            logger.info(f"Loading embedding model: {model_name} (offline mode)")
             
-            # Initialize embeddings with explicit device mapping and safer settings
-            model_kwargs = {
-                'device': 'cpu',
-                'trust_remote_code': False
-            }
-            encode_kwargs = {
-                'normalize_embeddings': True,
-                'batch_size': 1  # Smaller batch size to prevent memory issues
-            }
-            
+            # Initialize embeddings with minimal settings to avoid conflicts
             self.embeddings = HuggingFaceEmbeddings(
-                model_name=model_name,
-                model_kwargs=model_kwargs,
-                encode_kwargs=encode_kwargs
+                model_name=model_name
             )
             
-            # Test the embeddings with a small example to catch PyTorch issues early
+            # Test the embeddings with a small example
             logger.info("Testing embeddings with sample text...")
             test_result = self.embeddings.embed_query("test query")
             logger.info(f"✅ Embeddings test successful, vector size: {len(test_result)}")
@@ -106,14 +96,16 @@ class VectorStoreManager:
                 self.collection = self.vectorstore._collection
                 # Import SentenceTransformer only when embeddings work
                 from sentence_transformers import SentenceTransformer
-                self.embedding_model = SentenceTransformer(model_name, device='cpu')
+                logger.info(f"Initializing SentenceTransformer {model_name} in offline mode")
+                self.embedding_model = SentenceTransformer(model_name, cache_folder=None)  # Use default cache
                 return True
             else:
                 logger.warning("⚠️ No collections found in vector store - may need re-ingestion")
                 # Even if empty, set up the objects for potential future use
                 self.collection = self.vectorstore._collection
                 from sentence_transformers import SentenceTransformer
-                self.embedding_model = SentenceTransformer(model_name, device='cpu')
+                logger.info(f"Initializing SentenceTransformer {model_name} in offline mode (empty store)")
+                self.embedding_model = SentenceTransformer(model_name, cache_folder=None)  # Use default cache
                 return True  # Still valid, just empty
                 
         except Exception as e:
@@ -121,8 +113,8 @@ class VectorStoreManager:
             logger.error(f"❌ Failed to initialize embeddings: {error_msg}")
             
             # Check for specific PyTorch errors
-            if "meta tensor" in error_msg.lower() or "device" in error_msg.lower():
-                logger.error("🔍 Detected PyTorch device/tensor error - this is the known issue")
+            if "parallel work has started" in error_msg.lower():
+                logger.error("🔍 Detected PyTorch threading conflict - this is a known issue")
             elif "segmentation fault" in error_msg.lower() or "sigsegv" in error_msg.lower():
                 logger.error("🔍 Detected segmentation fault - memory/process issue")
             
@@ -420,6 +412,7 @@ class VectorStoreManager:
                 return []
             
             # Generate query embedding
+            query_embedding = self.embedding_model.encode([query]).tolist()[0]
             query_embedding = self.embedding_model.encode([query]).tolist()[0]
             
             # Search in ChromaDB
